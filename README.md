@@ -4,6 +4,8 @@ APPLICATION BROUGHT TO YOU BY PADDY https://x.com/PoolShamrock AND PAUL https://
 
 Windows-based NextJS application for user-friendly Midnight mining. Generate wallets, manage 1+X addresses, and mine with an intuitive web interface.
 
+When the app starts, it can keep around 10 minutes for things to fully get going. As the registration of addresses can take quite some time as they are registering in the API that has rate limiting, luckily this is a one time thing.
+
 WE TAKE ZEROOO RESPONSIBILITY FOR THIS SO USE IT AT YOUR OWN RISK.
 
 ## Features
