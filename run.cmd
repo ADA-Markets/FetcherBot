@@ -55,7 +55,7 @@ echo                         Ready to Mine!
 echo ================================================================================
 echo.
 echo Hash Service: http://127.0.0.1:9001/health
-echo Web Interface: http://localhost:3000
+echo Web Interface: http://localhost:3001
 echo.
 echo Press Ctrl+C to stop Next.js (hash server continues in background)
 echo To stop hash server: taskkill /F /IM hash-server.exe
@@ -64,10 +64,10 @@ echo.
 
 REM Open browser
 timeout /t 2 /nobreak >nul
-start http://localhost:3000
+start http://localhost:3001
 
 REM Start dev server
-next dev
+next dev -p 3001
 
 echo.
 echo Next.js stopped.

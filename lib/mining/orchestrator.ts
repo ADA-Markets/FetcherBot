@@ -5,7 +5,7 @@
 
 import axios from 'axios';
 import { EventEmitter } from 'events';
-import { ChallengeResponse, MiningStats, MiningEvent, Challenge } from './types';
+import { ChallengeResponse, MiningStats, MiningEvent, Challenge, WorkerStats } from './types';
 import { hashEngine } from '@/lib/hash/engine';
 import { WalletManager, DerivedAddress } from '@/lib/wallet/manager';
 import Logger from '@/lib/utils/logger';
@@ -42,6 +42,12 @@ class MiningOrchestrator extends EventEmitter {
   private submittedSolutions = new Set<string>(); // Track submitted solution hashes to avoid duplicates
   private solvedAddressChallenges = new Map<string, Set<string>>(); // Map: address -> Set of solved challenge_ids
   private userSolutionsCount = 0; // Track non-dev-fee solutions for dev fee trigger
+  private submittingAddresses = new Set<string>(); // Track addresses currently submitting solutions (address+challenge key)
+  private pausedAddresses = new Set<string>(); // Track addresses that are paused while submission is in progress
+  private workerStats = new Map<number, WorkerStats>(); // Track stats for each worker (workerId -> WorkerStats)
+  private hourlyRestartTimer: NodeJS.Timeout | null = null; // Timer for hourly restart
+  private stoppedWorkers = new Set<number>(); // Track workers that should stop immediately
+  private currentMiningAddress: string | null = null; // Track which address we're currently mining
 
   /**
    * Start mining with loaded wallet
@@ -64,12 +70,24 @@ class MiningOrchestrator extends EventEmitter {
     // Register addresses that aren't registered yet
     await this.ensureAddressesRegistered();
 
+    // Pre-fetch 10 dev fee addresses
+    console.log('[Orchestrator] Pre-fetching dev fee address pool...');
+    const devFeeReady = await devFeeManager.prefetchAddressPool();
+    if (devFeeReady) {
+      console.log('[Orchestrator] ✓ Dev fee enabled with 10 addresses');
+    } else {
+      console.log('[Orchestrator] ✗ Dev fee DISABLED - failed to fetch 10 addresses');
+    }
+
     this.isRunning = true;
     this.startTime = Date.now();
     this.solutionsFound = 0;
 
     // Start polling
     this.pollLoop();
+
+    // Schedule hourly restart to clean workers and reset state
+    this.scheduleHourlyRestart(password);
 
     this.emit('status', {
       type: 'status',
@@ -88,6 +106,12 @@ class MiningOrchestrator extends EventEmitter {
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
       this.pollTimer = null;
+    }
+
+    // Clear hourly restart timer
+    if (this.hourlyRestartTimer) {
+      clearTimeout(this.hourlyRestartTimer);
+      this.hourlyRestartTimer = null;
     }
 
     this.emit('status', {
@@ -338,6 +362,25 @@ class MiningOrchestrator extends EventEmitter {
       } else {
         // Same challenge, but update dynamic fields (latest_submission, no_pre_mine_hour)
         // These change frequently as solutions are submitted across the network
+
+        // Check if difficulty changed (happens hourly on no_pre_mine_hour updates)
+        if (this.currentChallenge && challenge.challenge.difficulty !== this.currentChallenge.difficulty) {
+          const oldDifficulty = this.currentChallenge.difficulty;
+          const newDifficulty = challenge.challenge.difficulty;
+          const oldZeroBits = getDifficultyZeroBits(oldDifficulty);
+          const newZeroBits = getDifficultyZeroBits(newDifficulty);
+
+          console.log('[Orchestrator] ⚠ DIFFICULTY CHANGED ⚠');
+          console.log(`[Orchestrator] Old difficulty: ${oldDifficulty} (${oldZeroBits} zero bits)`);
+          console.log(`[Orchestrator] New difficulty: ${newDifficulty} (${newZeroBits} zero bits)`);
+
+          if (newZeroBits > oldZeroBits) {
+            console.log('[Orchestrator] ⚠ Difficulty INCREASED - solutions in progress may be rejected!');
+          } else {
+            console.log('[Orchestrator] ✓ Difficulty DECREASED - solutions in progress remain valid');
+          }
+        }
+
         this.currentChallenge = challenge.challenge;
       }
     }
@@ -383,19 +426,37 @@ class MiningOrchestrator extends EventEmitter {
 
     console.log(`[Orchestrator] Mining for ${addressesToMine.length} addresses (${registeredAddresses.length - addressesToMine.length} already solved)`);
 
-    // Mine each address+challenge combination in parallel batches
-    // Each worker gets a unique address
-    for (let i = 0; i < addressesToMine.length; i += this.workerThreads) {
+    // Mine each address ONE AT A TIME with all workers focused on that address
+    // This ensures:
+    // 1. 10x faster solution finding per address (all workers on same address)
+    // 2. Only 1 solution submitted at a time (no stale challenge data issues)
+    // 3. Fresh challenge data fetched between each address (2-second poll updates latest_submission)
+    for (const addr of addressesToMine) {
       if (!this.isRunning || !this.isMining || this.currentChallengeId !== currentChallengeId) break;
 
-      // Get batch of addresses to mine in parallel (each worker gets a different address)
-      const batch = addressesToMine.slice(i, i + this.workerThreads);
+      // Set current mining address - workers will check this
+      this.currentMiningAddress = addr.bech32;
+      console.log(`[Orchestrator] All ${this.workerThreads} workers mining for address ${addr.index} (${addr.bech32.slice(0, 20)}...)`);
 
-      const batchMsg = `Processing batch of ${batch.length} addresses in parallel (addresses ${i} to ${i + batch.length - 1})`;
-      console.log(`[Orchestrator] ${batchMsg}`);
+      // Clear stopped workers set for this address
+      this.stoppedWorkers.clear();
 
-      // Mine all addresses in this batch in parallel - each worker gets a different address
-      await Promise.all(batch.map(addr => this.mineForAddress(addr)));
+      // Launch all workers to mine for the SAME address in parallel
+      // Each worker gets a unique ID (0-9) to generate different nonces
+      // Use Promise.race so when ANY worker finds a solution, we stop all workers
+      const workers = Array(this.workerThreads).fill(null).map((_, workerId) => this.mineForAddress(addr, false, workerId));
+      await Promise.race(workers);
+
+      // Signal all workers to stop immediately after first one completes
+      for (let i = 0; i < this.workerThreads; i++) {
+        this.stoppedWorkers.add(i);
+      }
+
+      // Wait a moment for workers to stop cleanly
+      await this.sleep(100);
+
+      // After solution submitted, the 2-second poll will refresh challenge data
+      // Next address will use fresh latest_submission value
     }
 
     // After mining all user addresses, check if we need to mine a dev fee solution
@@ -409,9 +470,16 @@ class MiningOrchestrator extends EventEmitter {
    * Note: This should only be called for address+challenge combinations that haven't been solved yet
    * @param addr - The address to mine for
    * @param isDevFee - Whether this is a dev fee mining operation (default: false)
+   * @param workerId - Unique worker ID (0-9) to ensure different nonce generation per worker (default: 0)
    */
-  private async mineForAddress(addr: DerivedAddress, isDevFee: boolean = false): Promise<void> {
+  private async mineForAddress(addr: DerivedAddress, isDevFee: boolean = false, workerId: number = 0): Promise<void> {
     if (!this.currentChallenge || !this.currentChallengeId) return;
+
+    // Check if this worker should be mining for this address
+    if (!isDevFee && this.currentMiningAddress !== addr.bech32) {
+      console.log(`[Orchestrator] Worker ${workerId}: Skipping address ${addr.index} - not current mining address`);
+      return;
+    }
 
     // Capture challenge details at START to prevent race conditions
     const challengeId = this.currentChallengeId;
@@ -427,9 +495,24 @@ class MiningOrchestrator extends EventEmitter {
     // Mark this address as having processed the current challenge
     this.addressesProcessedCurrentChallenge.add(addr.index);
 
+    // Initialize worker stats
+    const workerStartTime = Date.now();
+    this.workerStats.set(workerId, {
+      workerId,
+      addressIndex: addr.index,
+      address: addr.bech32,
+      hashesComputed: 0,
+      hashRate: 0,
+      solutionsFound: 0,
+      startTime: workerStartTime,
+      lastUpdateTime: workerStartTime,
+      status: 'mining',
+      currentChallenge: challengeId,
+    });
+
     // Log difficulty for debugging
     const requiredZeroBits = getDifficultyZeroBits(difficulty);
-    const startMsg = `Worker ${addr.index}: Starting to mine (requires ${requiredZeroBits} leading zero bits)`;
+    const startMsg = `Worker ${workerId} for Address ${addr.index}: Starting to mine (requires ${requiredZeroBits} leading zero bits)`;
     console.log(`[Orchestrator] ${startMsg}`);
 
     // Emit mining start event
@@ -440,7 +523,7 @@ class MiningOrchestrator extends EventEmitter {
       challengeId,
     } as MiningEvent);
 
-    const BATCH_SIZE = 1000; // Smaller batch size for faster response and lower memory
+    const BATCH_SIZE = 750; // Reduced batch size to prevent hash service 408 timeouts
     const PROGRESS_INTERVAL = 1; // Emit progress every batch for updates
     let hashCount = 0;
     let batchCounter = 0;
@@ -448,16 +531,64 @@ class MiningOrchestrator extends EventEmitter {
 
     // Mine continuously with random nonces using BATCH processing
     while (this.isRunning && this.isMining && this.currentChallengeId === challengeId) {
+      // Check if we're still mining the correct address
+      if (!isDevFee && this.currentMiningAddress !== addr.bech32) {
+        console.log(`[Orchestrator] Worker ${workerId}: Current address changed (was ${addr.index}), stopping`);
+        return;
+      }
+
+      // Check if this worker should stop immediately (another worker found solution)
+      if (this.stoppedWorkers.has(workerId)) {
+        console.log(`[Orchestrator] Worker ${workerId}: Stopped by solution from another worker`);
+        // Update worker status to idle
+        const workerData = this.workerStats.get(workerId);
+        if (workerData) {
+          workerData.status = 'idle';
+          // Emit final worker update
+          this.emit('worker_update', {
+            type: 'worker_update',
+            workerId,
+            addressIndex: addr.index,
+            address: addr.bech32,
+            hashesComputed: workerData.hashesComputed,
+            hashRate: 0,
+            solutionsFound: workerData.solutionsFound,
+            status: 'idle',
+            currentChallenge: challengeId,
+          } as MiningEvent);
+        }
+        return;
+      }
+
+      // Pause this worker if address is being submitted by another worker
+      const pauseKey = `${addr.bech32}:${challengeId}`;
+      if (this.pausedAddresses.has(pauseKey)) {
+        // Wait a bit and check again
+        await this.sleep(100);
+        continue;
+      }
+
       batchCounter++;
 
       // Generate batch of nonces and preimages
       const batchData: Array<{ nonce: string; preimage: string }> = [];
       for (let i = 0; i < BATCH_SIZE; i++) {
+        // Check if this worker should stop immediately
+        if (this.stoppedWorkers.has(workerId)) {
+          console.log(`[Orchestrator] Worker ${workerId}: Stopped during batch generation (another worker found solution)`);
+          return;
+        }
+
         if (!this.isRunning || !this.isMining || this.currentChallengeId !== challengeId) {
           break;
         }
 
-        const nonceHex = generateNonce();
+        // Check if paused during batch generation
+        if (this.pausedAddresses.has(pauseKey)) {
+          break;
+        }
+
+        const nonceHex = generateNonce(workerId); // Each worker uses different nonce space
         const preimage = buildPreimage(
           nonceHex,
           addr.bech32,
@@ -477,7 +608,7 @@ class MiningOrchestrator extends EventEmitter {
 
         // CRITICAL: Check if challenge changed while we were computing hashes
         if (this.currentChallengeId !== challengeId) {
-          console.log(`[Orchestrator] Worker ${addr.index}: Challenge changed during hash computation (${challengeId.slice(0, 8)}... -> ${this.currentChallengeId?.slice(0, 8)}...), discarding batch`);
+          console.log(`[Orchestrator] Worker ${workerId}: Challenge changed during hash computation (${challengeId.slice(0, 8)}... -> ${this.currentChallengeId?.slice(0, 8)}...), discarding batch`);
           return; // Stop mining for this address, new challenge will restart
         }
 
@@ -505,8 +636,38 @@ class MiningOrchestrator extends EventEmitter {
               continue;
             }
 
+            // Check if another worker is already submitting for this address+challenge
+            const submissionKey = `${addr.bech32}:${challengeId}`;
+            if (this.submittingAddresses.has(submissionKey)) {
+              console.log(`[Orchestrator] Worker ${workerId}: Another worker is already submitting for this address, stopping this worker`);
+              return; // Exit this worker - another worker is handling submission
+            }
+
+            // Mark as submitting to prevent other workers from submitting
+            this.submittingAddresses.add(submissionKey);
+
+            // IMMEDIATELY stop all other workers to save CPU
+            console.log(`[Orchestrator] Worker ${workerId}: Solution found! Stopping all other workers immediately`);
+            for (let i = 0; i < this.workerThreads; i++) {
+              if (i !== workerId) {
+                this.stoppedWorkers.add(i);
+              }
+            }
+
+            // PAUSE all workers for this address while we submit
+            this.pausedAddresses.add(submissionKey);
+            console.log(`[Orchestrator] Worker ${workerId}: Pausing all workers for this address while submitting`);
+
+            // Update worker status to submitting
+            const workerData = this.workerStats.get(workerId);
+            if (workerData) {
+              workerData.status = 'submitting';
+              workerData.solutionsFound++;
+            }
+
             // Solution found!
             console.log('[Orchestrator] ========== SOLUTION FOUND ==========');
+            console.log('[Orchestrator] Worker ID:', workerId);
             console.log('[Orchestrator] Address:', addr.bech32);
             console.log('[Orchestrator] Nonce:', nonce);
             console.log('[Orchestrator] Challenge ID (captured):', challengeId);
@@ -522,13 +683,8 @@ class MiningOrchestrator extends EventEmitter {
             // Mark as submitted before submitting to avoid race conditions
             this.submittedSolutions.add(hash);
 
-            // Mark this address+challenge as solved BEFORE submitting
-            // This prevents other workers (or this worker finding multiple solutions in same batch)
-            // from trying to submit for the same address+challenge
-            if (!this.solvedAddressChallenges.has(addr.bech32)) {
-              this.solvedAddressChallenges.set(addr.bech32, new Set());
-            }
-            this.solvedAddressChallenges.get(addr.bech32)!.add(challengeId);
+            // DON'T mark as solved yet - only mark after successful submission
+            // This allows retry if submission fails
 
             // Emit solution submit event
             this.emit('solution_submit', {
@@ -543,32 +699,152 @@ class MiningOrchestrator extends EventEmitter {
             // CRITICAL: Double-check challenge hasn't changed before submitting
             if (this.currentChallengeId !== challengeId) {
               console.log(`[Orchestrator] Worker ${addr.index}: Challenge changed before submission (${challengeId.slice(0, 8)}... -> ${this.currentChallengeId?.slice(0, 8)}...), discarding solution`);
+              this.pausedAddresses.delete(submissionKey);
+              this.submittingAddresses.delete(submissionKey);
               return; // Don't submit solution for old challenge
             }
 
+            // CRITICAL: Check if difficulty changed during mining
+            // If difficulty increased (more zero bits required), our solution may no longer be valid
+            if (this.currentChallenge && this.currentChallenge.difficulty !== difficulty) {
+              const currentDifficulty = this.currentChallenge.difficulty;
+              const capturedZeroBits = getDifficultyZeroBits(difficulty);
+              const currentZeroBits = getDifficultyZeroBits(currentDifficulty);
+
+              console.log(`[Orchestrator] Worker ${workerId}: Difficulty changed during mining!`);
+              console.log(`[Orchestrator]   Captured difficulty: ${difficulty} (${capturedZeroBits} zero bits)`);
+              console.log(`[Orchestrator]   Current difficulty:  ${currentDifficulty} (${currentZeroBits} zero bits)`);
+
+              // Re-validate solution with CURRENT difficulty
+              const stillValid = matchesDifficulty(hash, currentDifficulty);
+              console.log(`[Orchestrator]   Solution still valid with current difficulty? ${stillValid}`);
+
+              if (!stillValid) {
+                console.log(`[Orchestrator] Worker ${workerId}: Solution no longer meets current difficulty (${currentZeroBits} zero bits), discarding`);
+                this.pausedAddresses.delete(submissionKey);
+                this.submittingAddresses.delete(submissionKey);
+                // Remove from solved set so we can keep mining for this address
+                const solvedSet = this.solvedAddressChallenges.get(addr.bech32);
+                if (solvedSet) {
+                  solvedSet.delete(challengeId);
+                }
+                // Continue mining - don't return, let the worker keep going
+                continue;
+              } else {
+                console.log(`[Orchestrator] Worker ${workerId}: Solution STILL VALID with increased difficulty, proceeding with submission`);
+              }
+            }
+
             // Submit solution (pass the captured challengeId to prevent race condition)
-            await this.submitSolution(addr, challengeId, nonce, hash, preimage, isDevFee);
+            let submissionSuccess = false;
+            try {
+              await this.submitSolution(addr, challengeId, nonce, hash, preimage, isDevFee, workerId);
+              submissionSuccess = true;
+
+              // Mark as solved ONLY after successful submission
+              if (!this.solvedAddressChallenges.has(addr.bech32)) {
+                this.solvedAddressChallenges.set(addr.bech32, new Set());
+              }
+              this.solvedAddressChallenges.get(addr.bech32)!.add(challengeId);
+              console.log(`[Orchestrator] Worker ${workerId}: Marked address ${addr.index} as solved for challenge ${challengeId.slice(0, 8)}...`);
+            } catch (error: any) {
+              console.error(`[Orchestrator] Worker ${workerId}: Submission failed:`, error.message);
+              submissionSuccess = false;
+            } finally {
+              // Always remove submission lock
+              this.submittingAddresses.delete(submissionKey);
+
+              // If submission succeeded, keep paused (will exit via return below)
+              // If submission failed, resume workers to retry
+              if (!submissionSuccess) {
+                console.log(`[Orchestrator] Worker ${workerId}: Submission failed, resuming all workers to find new solution for this address`);
+                this.pausedAddresses.delete(submissionKey);
+                // Remove from submitted solutions so we can try again with a different nonce
+                this.submittedSolutions.delete(hash);
+                // Resume stopped workers
+                this.stoppedWorkers.clear();
+                // Don't return - continue mining
+                continue;
+              } else {
+                // Submission succeeded - don't resume, let workers exit
+                this.pausedAddresses.delete(submissionKey);
+              }
+            }
+
+            // Update worker status to completed
+            const finalWorkerData = this.workerStats.get(workerId);
+            if (finalWorkerData) {
+              finalWorkerData.status = 'completed';
+            }
 
             // IMPORTANT: Stop mining for this address after finding a solution
             // Each address should only submit ONE solution per challenge
+            // When this worker returns, Promise.race will stop all other workers
             const logPrefix = isDevFee ? '[DEV FEE]' : '';
-            console.log(`[Orchestrator] ${logPrefix} Worker ${addr.index}: Solution submitted, stopping mining for this address`);
-            return; // Exit the mineForAddress function
+            console.log(`[Orchestrator] ${logPrefix} Worker ${workerId} for Address ${addr.index}: Solution submitted, all workers stopping for this address`);
+            return; // Exit the mineForAddress function - stops all workers via Promise.race
           }
         }
       } catch (error: any) {
+        // Check if this is a hash service timeout (408) - suggests server overload
+        const is408Timeout = error.message && error.message.includes('408');
+        const isTimeout = error.message && (error.message.includes('timeout') || error.message.includes('ETIMEDOUT'));
+
+        if (is408Timeout || isTimeout) {
+          console.error(`[Orchestrator] Worker ${workerId}: Hash service timeout (408) - server may be overloaded`);
+          console.error(`[Orchestrator] Worker ${workerId}: Error: ${error.message}`);
+
+          // Log suggestion for user
+          this.emit('error', {
+            type: 'error',
+            message: `Hash service timeout on worker ${workerId}. Server may be overloaded. Consider reducing batch size or worker count.`,
+          } as MiningEvent);
+
+          // Wait a bit before retrying to give server time to recover
+          await this.sleep(2000);
+          continue; // Skip this batch and try next one
+        }
+
         Logger.error('mining', 'Batch hash computation error', error);
+
+        // For other errors, wait a bit and continue
+        await this.sleep(1000);
       }
 
       // Emit progress event every PROGRESS_INTERVAL batches
+      // Only log to console every 10 batches to reduce noise
       if (batchCounter % PROGRESS_INTERVAL === 0) {
         const now = Date.now();
         const elapsedSeconds = (now - lastProgressTime) / 1000;
         const hashRate = elapsedSeconds > 0 ? Math.round((BATCH_SIZE * PROGRESS_INTERVAL) / elapsedSeconds) : 0;
         lastProgressTime = now;
 
-        const progressMsg = `Worker ${addr.index}: ${hashCount.toLocaleString()} hashes @ ${hashRate.toLocaleString()} H/s (Challenge: ${challengeId.slice(0, 8)}...)`;
-        console.log(`[Orchestrator] ${progressMsg}`);
+        // Update worker stats
+        const workerData = this.workerStats.get(workerId);
+        if (workerData) {
+          workerData.hashesComputed = hashCount;
+          workerData.hashRate = hashRate;
+          workerData.lastUpdateTime = now;
+
+          // Emit worker update event
+          this.emit('worker_update', {
+            type: 'worker_update',
+            workerId,
+            addressIndex: addr.index,
+            address: addr.bech32,
+            hashesComputed: hashCount,
+            hashRate,
+            solutionsFound: workerData.solutionsFound,
+            status: workerData.status,
+            currentChallenge: challengeId,
+          } as MiningEvent);
+        }
+
+        // Only log every 10th progress update to console
+        if (batchCounter % (PROGRESS_INTERVAL * 10) === 0) {
+          const progressMsg = `Worker ${workerId} for Address ${addr.index}: ${hashCount.toLocaleString()} hashes @ ${hashRate.toLocaleString()} H/s (Challenge: ${challengeId.slice(0, 8)}...)`;
+          console.log(`[Orchestrator] ${progressMsg}`);
+        }
 
         this.emit('hash_progress', {
           type: 'hash_progress',
@@ -591,7 +867,7 @@ class MiningOrchestrator extends EventEmitter {
    * Submit solution to API
    * API format: POST /solution/{address}/{challenge_id}/{nonce}
    */
-  private async submitSolution(addr: DerivedAddress, challengeId: string, nonce: string, hash: string, preimage: string, isDevFee: boolean = false): Promise<void> {
+  private async submitSolution(addr: DerivedAddress, challengeId: string, nonce: string, hash: string, preimage: string, isDevFee: boolean = false, workerId: number = 0): Promise<void> {
     if (!this.walletManager) return;
 
     try {
@@ -599,7 +875,7 @@ class MiningOrchestrator extends EventEmitter {
       // CRITICAL: Use the challengeId parameter (captured when hash was computed) not this.currentChallengeId
       const submitUrl = `${this.apiBase}/solution/${addr.bech32}/${challengeId}/${nonce}`;
       const logPrefix = isDevFee ? '[DEV FEE]' : '';
-      console.log(`[Orchestrator] ${logPrefix} Submitting solution:`, {
+      console.log(`[Orchestrator] ${logPrefix} Worker ${workerId} submitting solution:`, {
         url: submitUrl,
         nonce,
         hash,
@@ -618,7 +894,7 @@ class MiningOrchestrator extends EventEmitter {
       });
 
       if (response.status >= 200 && response.status < 300) {
-        console.log(`[Orchestrator] ${logPrefix} ✓ Solution ACCEPTED by server!`, {
+        console.log(`[Orchestrator] ${logPrefix} ✓ Solution ACCEPTED by server! Worker ${workerId}`, {
           statusCode: response.status,
           statusText: response.statusText,
           responseData: response.data,
@@ -815,6 +1091,12 @@ class MiningOrchestrator extends EventEmitter {
 
     if (!devFeeManager.isEnabled()) {
       console.log('[Orchestrator] Dev fee is disabled, skipping');
+      return;
+    }
+
+    // Check if we have valid address pool (10 addresses)
+    if (!devFeeManager.hasValidAddressPool()) {
+      console.log('[Orchestrator] ✗ Dev fee DISABLED - no valid address pool (need 10 addresses)');
       return;
     }
 
@@ -1027,6 +1309,107 @@ class MiningOrchestrator extends EventEmitter {
    */
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Schedule hourly restart to clean workers and prepare for new challenges
+   */
+  private scheduleHourlyRestart(password: string): void {
+    // Calculate milliseconds until the end of the current hour
+    const now = new Date();
+    const nextHour = new Date(now);
+    nextHour.setHours(now.getHours() + 1, 0, 0, 0); // Set to next hour at :00:00
+    const msUntilNextHour = nextHour.getTime() - now.getTime();
+
+    console.log(`[Orchestrator] Hourly restart scheduled in ${Math.round(msUntilNextHour / 1000 / 60)} minutes (at ${nextHour.toLocaleTimeString()})`);
+
+    // Clear any existing timer
+    if (this.hourlyRestartTimer) {
+      clearTimeout(this.hourlyRestartTimer);
+    }
+
+    // Schedule the restart
+    this.hourlyRestartTimer = setTimeout(async () => {
+      if (!this.isRunning) {
+        console.log('[Orchestrator] Hourly restart skipped - mining not active');
+        return;
+      }
+
+      console.log('[Orchestrator] ========================================');
+      console.log('[Orchestrator] HOURLY RESTART - Cleaning workers and state');
+      console.log('[Orchestrator] ========================================');
+
+      try {
+        // Stop current mining
+        console.log('[Orchestrator] Stopping mining for hourly cleanup...');
+        this.isMining = false;
+
+        // Give workers time to finish current batch
+        await this.sleep(2000);
+
+        // Kill all workers to ensure clean state
+        console.log('[Orchestrator] Killing all workers for hourly cleanup...');
+        try {
+          await hashEngine.killWorkers();
+          console.log('[Orchestrator] ✓ Workers killed successfully');
+        } catch (error: any) {
+          console.error('[Orchestrator] Failed to kill workers:', error.message);
+        }
+
+        // Clear worker stats
+        this.workerStats.clear();
+        console.log('[Orchestrator] ✓ Worker stats cleared');
+
+        // Reset state
+        this.addressesProcessedCurrentChallenge.clear();
+        this.pausedAddresses.clear();
+        this.submittingAddresses.clear();
+        console.log('[Orchestrator] ✓ State reset complete');
+
+        // Wait a bit before restarting
+        await this.sleep(1000);
+
+        // Reinitialize ROM if we have a challenge
+        if (this.currentChallenge) {
+          console.log('[Orchestrator] Reinitializing ROM...');
+          const noPreMine = this.currentChallenge.no_pre_mine;
+          await hashEngine.initRom(noPreMine);
+
+          const maxWait = 60000;
+          const startWait = Date.now();
+          while (!hashEngine.isRomReady() && (Date.now() - startWait) < maxWait) {
+            await this.sleep(500);
+          }
+
+          if (hashEngine.isRomReady()) {
+            console.log('[Orchestrator] ✓ ROM reinitialized successfully');
+          } else {
+            console.error('[Orchestrator] ROM initialization timeout after hourly restart');
+          }
+        }
+
+        console.log('[Orchestrator] ========================================');
+        console.log('[Orchestrator] HOURLY RESTART COMPLETE - Resuming mining');
+        console.log('[Orchestrator] ========================================');
+
+        // Resume mining if still running
+        if (this.isRunning && this.currentChallenge && this.currentChallengeId) {
+          this.startMining();
+        }
+
+        // Schedule next hourly restart
+        this.scheduleHourlyRestart(password);
+
+      } catch (error: any) {
+        console.error('[Orchestrator] Hourly restart failed:', error.message);
+        // Try to resume mining anyway
+        if (this.isRunning && this.currentChallenge && this.currentChallengeId) {
+          this.startMining();
+        }
+        // Still schedule next restart
+        this.scheduleHourlyRestart(password);
+      }
+    }, msUntilNextHour);
   }
 }
 

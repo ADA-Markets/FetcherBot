@@ -6,6 +6,8 @@ Windows-based NextJS application for user-friendly Midnight mining. Generate wal
 
 When the app starts, it can keep around 10 minutes for things to fully get going. As the registration of addresses can take quite some time as they are registering in the API that has rate limiting, luckily this is a one time thing.
 
+This app is very much in early stages and bugs will appear!
+
 Also note this was built very quickly and possibly has many bugs. 
 
 WE TAKE ZEROOO RESPONSIBILITY FOR THIS SO USE IT AT YOUR OWN RISK.
@@ -53,7 +55,7 @@ This software includes a small development fee to support ongoing maintenance an
    - ✅ Build the application
    - ✅ Open your browser and start the app
 
-4. **Access the app** at `http://localhost:3000`
+4. **Access the app** at `http://localhost:3001`
 
 ## Usage
 
@@ -61,7 +63,7 @@ Run: setup.cmd
 
 On Complete navigate on browser to
 
-http://localhost:9001
+http://localhost:3001
 
 ### First Time Setup
 
@@ -196,7 +198,7 @@ Create `config.json` in the project root (optional):
 npm run dev
 ```
 
-Access at `http://localhost:3000`
+Access at `http://localhost:3001`
 
 ### Build for Production
 
@@ -208,9 +210,9 @@ npm run start
 ### Project Scripts
 
 ```cmd
-npm run dev          # Start development server
+npm run dev          # Start development server (port 3001)
 npm run build        # Build for production
-npm run start        # Start production server
+npm run start        # Start production server (port 3001)
 npm run lint         # Run linter
 npm run build:native # Build native module only
 ```

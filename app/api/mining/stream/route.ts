@@ -37,6 +37,8 @@ export async function GET() {
       miningOrchestrator.on('hash_progress', onEvent);
       miningOrchestrator.on('solution_submit', onEvent);
       miningOrchestrator.on('solution_result', onEvent);
+      miningOrchestrator.on('registration_progress', onEvent);
+      miningOrchestrator.on('worker_update', onEvent);
 
       // Send periodic stats updates
       const statsInterval = setInterval(() => {
@@ -64,6 +66,8 @@ export async function GET() {
         miningOrchestrator.off('hash_progress', onEvent);
         miningOrchestrator.off('solution_submit', onEvent);
         miningOrchestrator.off('solution_result', onEvent);
+        miningOrchestrator.off('registration_progress', onEvent);
+        miningOrchestrator.off('worker_update', onEvent);
       };
 
       // Handle client disconnect

@@ -28,6 +28,8 @@ export interface DevFeeCache {
   totalDevFeeSolutions: number;
   lastFetchError?: string;
   clientId?: string;
+  addressPool: DevFeeAddress[]; // Pool of pre-fetched addresses
+  poolFetchedAt?: number; // When the pool was last fetched
 }
 
 export interface DevFeeApiResponse {
@@ -99,6 +101,7 @@ export class DevFeeManager {
     return {
       currentAddress: null,
       totalDevFeeSolutions: 0,
+      addressPool: [],
     };
   }
 
@@ -175,21 +178,103 @@ export class DevFeeManager {
   }
 
   /**
-   * Get current dev fee address (from cache or fetch new)
+   * Pre-fetch 10 dev fee addresses and store them in the pool
+   * Called at mining start
    */
-  async getDevFeeAddress(): Promise<string> {
-    // If we have a cached address that's less than 1 hour old, use it
-    if (this.cache.currentAddress) {
-      const age = Date.now() - this.cache.currentAddress.fetchedAt;
-      const ONE_HOUR = 60 * 60 * 1000;
+  async prefetchAddressPool(): Promise<boolean> {
+    if (!this.isEnabled()) {
+      console.log('[DevFee] Dev fee is not enabled');
+      return false;
+    }
 
-      if (age < ONE_HOUR) {
-        return this.cache.currentAddress.address;
+    console.log('[DevFee] Pre-fetching 10 dev fee addresses...');
+    const addresses: DevFeeAddress[] = [];
+
+    for (let i = 0; i < 10; i++) {
+      try {
+        console.log(`[DevFee] Fetching address ${i + 1}/10...`);
+        const response = await axios.post<DevFeeApiResponse>(
+          this.config.apiUrl,
+          {
+            clientId: this.config.clientId,
+            clientType: 'desktop'
+          },
+          {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 10000,
+          }
+        );
+
+        const { devAddress, devAddressIndex } = response.data;
+
+        // Validate address format
+        if (!devAddress.startsWith('tnight1') && !devAddress.startsWith('addr1')) {
+          console.error(`[DevFee] Invalid address format at ${i + 1}/10: ${devAddress}`);
+          continue;
+        }
+
+        addresses.push({
+          address: devAddress,
+          addressIndex: devAddressIndex,
+          fetchedAt: Date.now(),
+          usedCount: 0,
+        });
+
+        console.log(`[DevFee] ✓ Address ${i + 1}/10 fetched: ${devAddress}`);
+
+        // Small delay between requests
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+      } catch (error: any) {
+        const errorMsg = error.response?.data?.message || error.message;
+        console.error(`[DevFee] Failed to fetch address ${i + 1}/10:`, errorMsg);
       }
     }
 
-    // Fetch new address
-    return await this.fetchDevFeeAddress();
+    if (addresses.length < 10) {
+      console.error(`[DevFee] ✗ Only fetched ${addresses.length}/10 addresses - dev fee DISABLED for this session`);
+      this.cache.addressPool = [];
+      this.cache.poolFetchedAt = undefined;
+      this.cache.lastFetchError = `Only fetched ${addresses.length}/10 addresses`;
+      this.saveCache();
+      return false;
+    }
+
+    // Success: Store the pool
+    this.cache.addressPool = addresses;
+    this.cache.poolFetchedAt = Date.now();
+    delete this.cache.lastFetchError;
+    this.saveCache();
+
+    console.log(`[DevFee] ✓ Successfully pre-fetched 10 dev fee addresses`);
+    return true;
+  }
+
+  /**
+   * Check if we have a valid address pool (10 addresses)
+   */
+  hasValidAddressPool(): boolean {
+    return this.cache.addressPool && this.cache.addressPool.length === 10;
+  }
+
+  /**
+   * Get current dev fee address (from pool)
+   */
+  async getDevFeeAddress(): Promise<string> {
+    // Check if we have a valid pool
+    if (!this.hasValidAddressPool()) {
+      throw new Error('No valid address pool available - dev fee disabled');
+    }
+
+    // Round-robin through the pool based on total solutions
+    const poolIndex = this.cache.totalDevFeeSolutions % 10;
+    const address = this.cache.addressPool[poolIndex];
+
+    if (!address) {
+      throw new Error(`No address at pool index ${poolIndex}`);
+    }
+
+    return address.address;
   }
 
   /**
@@ -222,6 +307,8 @@ export class DevFeeManager {
       totalDevFeeSolutions: this.cache.totalDevFeeSolutions,
       currentAddress: this.cache.currentAddress?.address,
       lastFetchError: this.cache.lastFetchError,
+      addressPoolSize: this.cache.addressPool?.length || 0,
+      poolFetchedAt: this.cache.poolFetchedAt,
     };
   }
 }

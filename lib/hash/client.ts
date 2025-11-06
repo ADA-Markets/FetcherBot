@@ -156,14 +156,15 @@ export class HashClient {
           throw new Error(`Failed to batch hash: ${err.response.data?.error || err.message}`);
         }
 
-        // Retry on connection issues, timeouts, or 503 (service unavailable)
+        // Retry on connection issues, timeouts, or 503/408 (service unavailable/timeout)
         const isRetriable =
           err.code === 'ECONNREFUSED' ||
           err.code === 'ECONNRESET' ||
           err.code === 'ETIMEDOUT' ||
           err.code === 'ECONNABORTED' ||
           err.message.includes('socket hang up') ||
-          err.response?.status === 503;
+          err.response?.status === 503 ||
+          err.response?.status === 408; // Request Timeout
 
         if (!isRetriable || attempt === this.maxRetries - 1) {
           break;

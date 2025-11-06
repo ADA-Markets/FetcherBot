@@ -97,4 +97,29 @@ export interface RegistrationProgressEvent {
   message?: string;
 }
 
-export type MiningEvent = SolutionEvent | StatusEvent | StatsEvent | ErrorEvent | MiningStartEvent | HashProgressEvent | SolutionSubmitEvent | SolutionResultEvent | RegistrationProgressEvent;
+export interface WorkerStats {
+  workerId: number;
+  addressIndex: number;
+  address: string;
+  hashesComputed: number;
+  hashRate: number;
+  solutionsFound: number;
+  startTime: number;
+  lastUpdateTime: number;
+  status: 'idle' | 'mining' | 'submitting' | 'completed';
+  currentChallenge: string | null;
+}
+
+export interface WorkerUpdateEvent {
+  type: 'worker_update';
+  workerId: number;
+  addressIndex: number;
+  address: string;
+  hashesComputed: number;
+  hashRate: number;
+  solutionsFound: number;
+  status: 'idle' | 'mining' | 'submitting' | 'completed';
+  currentChallenge: string | null;
+}
+
+export type MiningEvent = SolutionEvent | StatusEvent | StatsEvent | ErrorEvent | MiningStartEvent | HashProgressEvent | SolutionSubmitEvent | SolutionResultEvent | RegistrationProgressEvent | WorkerUpdateEvent;

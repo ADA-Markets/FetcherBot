@@ -6,8 +6,21 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatCard } from '@/components/ui/stat-card';
 import { Alert } from '@/components/ui/alert';
-import { Play, Square, Home, Loader2, Activity, Clock, Target, Hash, CheckCircle2, Wallet, Terminal, ChevronDown, ChevronUp, Pause, Play as PlayIcon, Maximize2, Minimize2, Cpu, ListChecks, TrendingUp, TrendingDown, Calendar, Copy, Check, XCircle } from 'lucide-react';
+import { Play, Square, Home, Loader2, Activity, Clock, Target, Hash, CheckCircle2, Wallet, Terminal, ChevronDown, ChevronUp, Pause, Play as PlayIcon, Maximize2, Minimize2, Cpu, ListChecks, TrendingUp, TrendingDown, Calendar, Copy, Check, XCircle, Users, Award, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+interface WorkerStats {
+  workerId: number;
+  addressIndex: number;
+  address: string;
+  hashesComputed: number;
+  hashRate: number;
+  solutionsFound: number;
+  startTime: number;
+  lastUpdateTime: number;
+  status: 'idle' | 'mining' | 'submitting' | 'completed';
+  currentChallenge: string | null;
+}
 
 interface MiningStats {
   active: boolean;
@@ -82,11 +95,14 @@ function MiningDashboardContent() {
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'history' | 'rewards'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'history' | 'rewards' | 'workers'>('dashboard');
   const [history, setHistory] = useState<HistoryData | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<'all' | 'success' | 'error'>('all');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Workers state
+  const [workers, setWorkers] = useState<Map<number, WorkerStats>>(new Map());
 
   // Rewards state
   const [rewardsData, setRewardsData] = useState<any | null>(null);
@@ -173,6 +189,24 @@ function MiningDashboardContent() {
         } else {
           addLog(`❌ Solution for address ${data.addressIndex} REJECTED: ${data.message}`, 'error');
         }
+      } else if (data.type === 'worker_update') {
+        // Update worker stats
+        setWorkers(prev => {
+          const newWorkers = new Map(prev);
+          newWorkers.set(data.workerId, {
+            workerId: data.workerId,
+            addressIndex: data.addressIndex,
+            address: data.address,
+            hashesComputed: data.hashesComputed,
+            hashRate: data.hashRate,
+            solutionsFound: data.solutionsFound,
+            startTime: prev.get(data.workerId)?.startTime || Date.now(),
+            lastUpdateTime: Date.now(),
+            status: data.status,
+            currentChallenge: data.currentChallenge,
+          });
+          return newWorkers;
+        });
       } else if (data.type === 'error') {
         setError(data.message);
         addLog(`Error: ${data.message}`, 'error');
@@ -485,6 +519,21 @@ function MiningDashboardContent() {
             <TrendingUp className="w-4 h-4 inline mr-2" />
             Rewards
             {activeTab === 'rewards' && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-400" />
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab('workers')}
+            className={cn(
+              'px-6 py-3 font-medium transition-colors relative',
+              activeTab === 'workers'
+                ? 'text-blue-400'
+                : 'text-gray-400 hover:text-gray-300'
+            )}
+          >
+            <Users className="w-4 h-4 inline mr-2" />
+            Workers
+            {activeTab === 'workers' && (
               <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-400" />
             )}
           </button>
@@ -1283,6 +1332,184 @@ function MiningDashboardContent() {
                     </Card>
                   </>
                 )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Workers Tab */}
+        {activeTab === 'workers' && (
+          <div className="space-y-6">
+            {workers.size === 0 ? (
+              <Card variant="bordered">
+                <CardContent className="text-center py-12">
+                  <Users className="w-16 h-16 mx-auto mb-4 opacity-50 text-gray-500" />
+                  <p className="text-gray-400 text-lg mb-2">No active workers</p>
+                  <p className="text-gray-500 text-sm">Workers will appear here when mining starts</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <>
+                {/* Workers Summary */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <StatCard
+                    label="Total Workers"
+                    value={`${workers.size} / ${stats?.workerThreads || 10}`}
+                    icon={<Users />}
+                    variant="success"
+                  />
+                  <StatCard
+                    label="Total Hashes"
+                    value={Array.from(workers.values()).reduce((sum, w) => sum + w.hashesComputed, 0).toLocaleString()}
+                    icon={<Hash />}
+                    variant="primary"
+                  />
+                  <StatCard
+                    label="Avg Hash Rate"
+                    value={`${Math.round(Array.from(workers.values()).reduce((sum, w) => sum + w.hashRate, 0) / workers.size).toLocaleString()} H/s`}
+                    icon={<Zap />}
+                    variant="default"
+                  />
+                  <StatCard
+                    label="Solutions Found"
+                    value={Array.from(workers.values()).reduce((sum, w) => sum + w.solutionsFound, 0)}
+                    icon={<Award />}
+                    variant="success"
+                  />
+                </div>
+
+                {/* Workers Race View */}
+                <Card variant="bordered">
+                  <CardHeader>
+                    <CardTitle className="text-xl flex items-center gap-2">
+                      <Users className="w-5 h-5 text-blue-400" />
+                      Worker Performance Race
+                    </CardTitle>
+                    <CardDescription>
+                      Real-time worker performance tracking - fastest workers at the top
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      {Array.from(workers.values())
+                        .sort((a, b) => {
+                          // Sort by solutions found (descending) - winners always on top
+                          if (b.solutionsFound !== a.solutionsFound) {
+                            return b.solutionsFound - a.solutionsFound;
+                          }
+                          // Then by worker ID for stable sort (no jumping)
+                          return a.workerId - b.workerId;
+                        })
+                        .map((worker, index) => {
+                          const maxHashes = Math.max(...Array.from(workers.values()).map(w => w.hashesComputed));
+                          const percentage = maxHashes > 0 ? (worker.hashesComputed / maxHashes) * 100 : 0;
+                          const uptime = Date.now() - worker.startTime;
+                          const uptimeSeconds = Math.floor(uptime / 1000);
+
+                          return (
+                            <div
+                              key={worker.workerId}
+                              className={cn(
+                                'p-4 rounded-lg border transition-all duration-300',
+                                worker.status === 'mining' && 'bg-blue-900/10 border-blue-700/50',
+                                worker.status === 'submitting' && 'bg-yellow-900/10 border-yellow-700/50 animate-pulse',
+                                worker.status === 'completed' && 'bg-green-900/10 border-green-700/50',
+                                worker.status === 'idle' && 'bg-gray-900/10 border-gray-700/50'
+                              )}
+                            >
+                              <div className="flex items-center gap-4">
+                                {/* Rank Badge */}
+                                <div className={cn(
+                                  'flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg',
+                                  index === 0 && 'bg-yellow-500/20 text-yellow-400 border-2 border-yellow-500',
+                                  index === 1 && 'bg-gray-400/20 text-gray-300 border-2 border-gray-400',
+                                  index === 2 && 'bg-orange-500/20 text-orange-400 border-2 border-orange-500',
+                                  index > 2 && 'bg-gray-700 text-gray-400'
+                                )}>
+                                  {index === 0 && '🥇'}
+                                  {index === 1 && '🥈'}
+                                  {index === 2 && '🥉'}
+                                  {index > 2 && `#${index + 1}`}
+                                </div>
+
+                                {/* Worker Info */}
+                                <div className="flex-1 space-y-2">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                      <span className="text-white font-semibold">Worker {worker.workerId}</span>
+                                      <span className={cn(
+                                        'px-2 py-1 rounded text-xs font-medium',
+                                        worker.status === 'mining' && 'bg-blue-500/20 text-blue-400',
+                                        worker.status === 'submitting' && 'bg-yellow-500/20 text-yellow-400',
+                                        worker.status === 'completed' && 'bg-green-500/20 text-green-400',
+                                        worker.status === 'idle' && 'bg-gray-500/20 text-gray-400'
+                                      )}>
+                                        {worker.status === 'mining' && '⚡ Mining'}
+                                        {worker.status === 'submitting' && '📤 Submitting'}
+                                        {worker.status === 'completed' && '✅ Completed'}
+                                        {worker.status === 'idle' && '💤 Idle'}
+                                      </span>
+                                      {worker.solutionsFound > 0 && (
+                                        <span className="px-2 py-1 rounded text-xs font-medium bg-green-500/20 text-green-400">
+                                          🏆 {worker.solutionsFound} solution{worker.solutionsFound > 1 ? 's' : ''}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-right">
+                                      <div className="text-sm text-gray-400">Address #{worker.addressIndex}</div>
+                                      <div className="text-xs text-gray-500 font-mono">
+                                        {worker.address.slice(0, 12)}...
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Progress Bar */}
+                                  <div className="space-y-1">
+                                    <div className="flex justify-between text-xs text-gray-400">
+                                      <span>{worker.hashesComputed.toLocaleString()} hashes</span>
+                                      <span>{worker.hashRate.toLocaleString()} H/s</span>
+                                    </div>
+                                    <div className="w-full bg-gray-800 rounded-full h-2 overflow-hidden">
+                                      <div
+                                        className={cn(
+                                          'h-full transition-all duration-500',
+                                          worker.status === 'mining' && 'bg-gradient-to-r from-blue-500 to-cyan-400',
+                                          worker.status === 'submitting' && 'bg-gradient-to-r from-yellow-500 to-orange-400',
+                                          worker.status === 'completed' && 'bg-gradient-to-r from-green-500 to-emerald-400',
+                                          worker.status === 'idle' && 'bg-gray-600'
+                                        )}
+                                        style={{ width: `${percentage}%` }}
+                                      />
+                                    </div>
+                                  </div>
+
+                                  {/* Stats Row */}
+                                  <div className="grid grid-cols-3 gap-2 text-xs">
+                                    <div>
+                                      <span className="text-gray-500">Uptime: </span>
+                                      <span className="text-gray-300">{uptimeSeconds}s</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-gray-500">Avg: </span>
+                                      <span className="text-gray-300">
+                                        {uptimeSeconds > 0 ? Math.round(worker.hashesComputed / uptimeSeconds).toLocaleString() : '0'} H/s
+                                      </span>
+                                    </div>
+                                    <div>
+                                      <span className="text-gray-500">Challenge: </span>
+                                      <span className="text-gray-300 font-mono">
+                                        {worker.currentChallenge ? worker.currentChallenge.slice(0, 8) + '...' : 'N/A'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </CardContent>
+                </Card>
               </>
             )}
           </div>

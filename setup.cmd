@@ -212,7 +212,7 @@ echo.
 
 REM Open browser to main app (not hash server)
 echo Opening web interface...
-start http://localhost:9001
+start http://localhost:3001
 
 echo.
 echo ================================================================================
