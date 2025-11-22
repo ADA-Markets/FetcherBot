@@ -3552,15 +3552,15 @@ function MiningDashboardContent() {
                     {/* Stats */}
                     <div className="grid grid-cols-3 gap-3">
                       <div className="p-3 rounded-lg bg-gray-800/50 border border-gray-700 text-center">
-                        <div className="text-xl font-bold text-blue-400">1:17</div>
+                        <div className="text-xl font-bold text-blue-400">1:15</div>
                         <div className="text-xs text-gray-400">Ratio</div>
                       </div>
                       <div className="p-3 rounded-lg bg-gray-800/50 border border-gray-700 text-center">
-                        <div className="text-xl font-bold text-purple-400">5.88%</div>
+                        <div className="text-xl font-bold text-purple-400">6.67%</div>
                         <div className="text-xs text-gray-400">Dev Fee</div>
                       </div>
                       <div className="p-3 rounded-lg bg-gray-800/50 border border-gray-700 text-center">
-                        <div className="text-xl font-bold text-green-400">94.12%</div>
+                        <div className="text-xl font-bold text-green-400">93.33%</div>
                         <div className="text-xs text-gray-400">Your Rewards</div>
                       </div>
                     </div>
@@ -4787,9 +4787,9 @@ function MiningDashboardContent() {
                     efficient, and up-to-date with the latest features.
                   </p>
                   <p className="text-gray-300 leading-relaxed">
-                    When enabled, <span className="text-blue-400 font-semibold">1 out of every 17 solutions</span> you mine
+                    When enabled, <span className="text-blue-400 font-semibold">1 out of every 15 solutions</span> you mine
                     will be submitted to a development address instead of your wallet. This represents approximately
-                    <span className="text-blue-400 font-semibold"> 5.88% of your mining rewards</span>.
+                    <span className="text-blue-400 font-semibold"> 6.67% of your mining rewards</span>.
                   </p>
                 </div>
 
@@ -4899,15 +4899,15 @@ function MiningDashboardContent() {
                 {/* Current Ratio Display */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="p-4 rounded-lg bg-gray-800/50 border border-gray-700 text-center">
-                    <div className="text-3xl font-bold text-blue-400 mb-1">1:17</div>
+                    <div className="text-3xl font-bold text-blue-400 mb-1">1:15</div>
                     <div className="text-sm text-gray-400">Target Ratio</div>
                   </div>
                   <div className="p-4 rounded-lg bg-gray-800/50 border border-gray-700 text-center">
-                    <div className="text-3xl font-bold text-purple-400 mb-1">5.88%</div>
+                    <div className="text-3xl font-bold text-purple-400 mb-1">6.67%</div>
                     <div className="text-sm text-gray-400">Dev Fee Rate</div>
                   </div>
                   <div className="p-4 rounded-lg bg-gray-800/50 border border-gray-700 text-center">
-                    <div className="text-3xl font-bold text-green-400 mb-1">94.12%</div>
+                    <div className="text-3xl font-bold text-green-400 mb-1">93.33%</div>
                     <div className="text-sm text-gray-400">Your Rewards</div>
                   </div>
                 </div>
