@@ -57,10 +57,12 @@ else
     echo "Node.js found!"
     node --version
 
-    # Check version
+    # Check version - Next.js 16 requires Node.js >= 20.9.0
     NODE_VERSION=$(node --version | cut -d'v' -f2 | cut -d'.' -f1)
-    if [ "$NODE_VERSION" -lt 18 ]; then
-        echo "WARNING: Node.js version is below 18. Version 20.x is recommended."
+    if [ "$NODE_VERSION" -lt 20 ]; then
+        echo ""
+        echo "ERROR: Node.js version is $NODE_VERSION.x but Next.js requires >= 20.9.0"
+        echo ""
         echo "To upgrade, run:"
         echo "  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -"
         echo "  sudo apt-get install -y nodejs"
