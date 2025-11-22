@@ -154,6 +154,40 @@ class ReceiptsLogger {
   }
 
   /**
+   * Get receipts for a specific challenge ID
+   * Returns all receipts matching the challenge, limited to the most recent 'count' entries
+   */
+  getReceiptsForChallenge(challengeId: string, count?: number): Receipt[] {
+    try {
+      if (!fs.existsSync(this.receiptsFile)) {
+        return [];
+      }
+
+      const content = fs.readFileSync(this.receiptsFile, 'utf8');
+      const lines = content.trim().split('\n').filter(line => line.length > 0);
+
+      // Parse all receipts and filter by challenge ID
+      const allReceipts = lines.map(line => {
+        try {
+          return JSON.parse(line);
+        } catch (e) {
+          return null;
+        }
+      }).filter(receipt => receipt !== null && receipt.challenge_id === challengeId) as Receipt[];
+
+      // Return limited count if specified, otherwise return all
+      if (count !== undefined && count > 0) {
+        return allReceipts.slice(-count);
+      }
+
+      return allReceipts;
+    } catch (error: any) {
+      console.error('[ReceiptsLogger] Failed to read receipts for challenge:', error.message);
+      return [];
+    }
+  }
+
+  /**
    * Read all errors
    */
   readErrors(): ErrorLog[] {

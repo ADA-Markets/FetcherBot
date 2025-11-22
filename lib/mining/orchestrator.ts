@@ -849,8 +849,9 @@ class MiningOrchestrator extends EventEmitter {
       const batchAddresses: DerivedAddress[] = [];
       let checked = 0;
 
-      // CHECK IF DEV FEE IS DUE - if so, add it as first address in this batch
-      if (this.shouldMineDevFeeNow()) {
+      // CHECK IF DEV FEE IS DUE - pass batchSize to account for in-flight workers
+      // This prevents overshooting (e.g., 12 solutions + 20 workers = 32 before next check)
+      if (this.shouldMineDevFeeNow(batchSize)) {
         const devFeeAddr = await this.getDevFeeAddressForBatch();
         if (devFeeAddr) {
           batchAddresses.push(devFeeAddr);
@@ -968,8 +969,9 @@ class MiningOrchestrator extends EventEmitter {
 
   /**
    * Check if we should mine dev fee now (ready to be added to batch)
+   * @param batchSize - The number of addresses that will be mined in this batch (to account for in-flight)
    */
-  private shouldMineDevFeeNow(): boolean {
+  private shouldMineDevFeeNow(batchSize: number = 1): boolean {
     // Only check if dev fee is enabled
     if (!devFeeManager.isEnabled() || !devFeeManager.hasValidAddressPool()) {
       return false;
@@ -980,14 +982,32 @@ class MiningOrchestrator extends EventEmitter {
       return false;
     }
 
-    // Check last N receipts for dev fee
-    // Ratio is 15 (1 in 15 total), so we need 14 user solutions before dev fee
-    const ratio = devFeeManager.getRatio();
-    const userSolutionsNeeded = ratio - 1; // 15 - 1 = 14 user solutions
+    // Dev fee ratio: 1 in 15 solutions goes to dev (14 user, 1 dev)
+    // We check GLOBAL receipts (across all challenges) since low-performance systems
+    // might take multiple challenges to accumulate 14 user solutions
+    const ratio = devFeeManager.getRatio(); // 15
+    const userSolutionsNeeded = ratio - 1; // 14 user solutions before dev fee
+
+    // Get recent receipts (enough to check the pattern)
     const lastReceipts = receiptsLogger.getRecentReceipts(ratio);
     const hasDevFeeInLastN = lastReceipts.some(r => r.isDevFee);
+    const userSolutionsSinceLastDevFee = lastReceipts.filter(r => !r.isDevFee).length;
 
-    return !hasDevFeeInLastN && lastReceipts.length >= userSolutionsNeeded;
+    // If there's already a dev fee in the last N receipts, we don't need another yet
+    if (hasDevFeeInLastN) {
+      return false;
+    }
+
+    // Account for in-flight workers: if current user solutions + batch size would exceed threshold,
+    // we should add dev fee to this batch to prevent overshooting
+    // Example: 12 user solutions, batch of 20 = could end up at 32 before next check
+    // So if userSolutions + batchSize > threshold, add dev fee now
+    const wouldOvershootWithBatch = (userSolutionsSinceLastDevFee + batchSize) > userSolutionsNeeded;
+
+    // Trigger dev fee if:
+    // 1. We already have enough user solutions (>= 14), OR
+    // 2. This batch would overshoot the threshold
+    return userSolutionsSinceLastDevFee >= userSolutionsNeeded || wouldOvershootWithBatch;
   }
 
   /**
