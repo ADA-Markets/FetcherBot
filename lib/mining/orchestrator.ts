@@ -64,6 +64,7 @@ class MiningOrchestrator extends EventEmitter {
   private previousChallenge: Challenge | null = null; // Previous challenge for graceful handover
   private previousChallengeId: string | null = null; // Previous challenge ID
   private gracefulHandoverInProgress = false; // Flag to indicate workers are finishing old challenge
+  private romReinitializationInProgress = false; // Flag to prevent multiple simultaneous ROM reinitializations
 
   constructor() {
     super();
@@ -1629,6 +1630,77 @@ class MiningOrchestrator extends EventEmitter {
           // Wait a bit before retrying to give server time to recover
           await this.sleep(2000);
           continue; // Skip this batch and try next one
+        }
+
+        // Check if ROM needs reinitialization (hash server may have restarted)
+        const isRomNotInitialized = error.message && error.message.includes('ROM not initialized');
+        if (isRomNotInitialized) {
+          console.error(`[Orchestrator] Worker ${workerId}: ROM not initialized - hash server may have restarted`);
+
+          // If another worker is already reinitializing, wait for it with timeout
+          if (this.romReinitializationInProgress) {
+            console.log(`[Orchestrator] Worker ${workerId}: ROM reinitialization already in progress, waiting...`);
+            const waitStart = Date.now();
+            const maxWaitForOther = 90000; // 90 second max wait for other worker's reinitialization
+            while (this.romReinitializationInProgress && (Date.now() - waitStart) < maxWaitForOther) {
+              await this.sleep(500);
+            }
+            // Check if ROM is now ready or if we timed out
+            if (hashEngine.isRomReady()) {
+              console.log(`[Orchestrator] Worker ${workerId}: ROM now ready, retrying batch...`);
+              continue; // Retry the batch
+            }
+            // If timed out waiting, reset flag and let this worker try
+            if (this.romReinitializationInProgress) {
+              console.warn(`[Orchestrator] Worker ${workerId}: Timeout waiting for other worker's ROM init, taking over...`);
+              this.romReinitializationInProgress = false;
+            }
+          }
+
+          // Double-check ROM isn't already ready (another worker may have just finished)
+          if (hashEngine.isRomReady()) {
+            console.log(`[Orchestrator] Worker ${workerId}: ROM already ready, retrying batch...`);
+            continue;
+          }
+
+          console.log(`[Orchestrator] Worker ${workerId}: Triggering ROM reinitialization...`);
+          this.romReinitializationInProgress = true;
+
+          // Try to reinitialize ROM using current challenge data
+          try {
+            if (this.currentChallenge?.no_pre_mine) {
+              await hashEngine.initRom(this.currentChallenge.no_pre_mine);
+
+              // Wait for ROM to be ready
+              const maxWait = 60000;
+              const startWait = Date.now();
+              while (!hashEngine.isRomReady() && (Date.now() - startWait) < maxWait) {
+                await this.sleep(500);
+              }
+
+              if (hashEngine.isRomReady()) {
+                console.log(`[Orchestrator] Worker ${workerId}: ✓ ROM reinitialized successfully`);
+              } else {
+                console.error(`[Orchestrator] Worker ${workerId}: ROM reinitialization timeout`);
+              }
+            } else {
+              console.error(`[Orchestrator] Worker ${workerId}: Cannot reinitialize ROM - no current challenge data`);
+            }
+          } catch (reinitError: any) {
+            console.error(`[Orchestrator] Worker ${workerId}: ROM reinitialization failed: ${reinitError.message}`);
+          } finally {
+            // Always clear the flag, even on failure
+            this.romReinitializationInProgress = false;
+          }
+
+          // If ROM is ready now, retry the batch
+          if (hashEngine.isRomReady()) {
+            continue;
+          }
+
+          // If reinitialization failed, wait and try again
+          await this.sleep(5000);
+          continue;
         }
 
         Logger.error('mining', 'Batch hash computation error', error);
