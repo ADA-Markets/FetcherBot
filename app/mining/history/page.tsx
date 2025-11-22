@@ -40,7 +40,9 @@ interface HistoryData {
   summary: {
     totalSolutions: number;
     totalErrors: number;
+    totalRetryAttempts?: number;
     successRate: string;
+    recentFailureCount?: number;
   };
 }
 
@@ -53,6 +55,8 @@ export default function MiningHistory() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [retryResult, setRetryResult] = useState<{ id: string; success: boolean; message: string } | null>(null);
+  const [retryingAll, setRetryingAll] = useState(false);
+  const [retryAllResult, setRetryAllResult] = useState<{ succeeded: number; failed: number } | null>(null);
 
   useEffect(() => {
     fetchHistory();
@@ -120,6 +124,38 @@ export default function MiningHistory() {
       setTimeout(() => setRetryResult(null), 5000);
     } finally {
       setRetryingId(null);
+    }
+  };
+
+  const retryAllFailures = async () => {
+    setRetryingAll(true);
+    setRetryAllResult(null);
+
+    try {
+      const response = await fetch('/api/mining/retry-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setRetryAllResult({
+          succeeded: data.summary?.succeeded || 0,
+          failed: data.summary?.failed || 0,
+        });
+        // Refresh history after retry
+        setTimeout(() => {
+          fetchHistory();
+          setRetryAllResult(null);
+        }, 3000);
+      } else {
+        setError(data.error || 'Retry all failed');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Retry all failed');
+    } finally {
+      setRetryingAll(false);
     }
   };
 
@@ -192,12 +228,49 @@ export default function MiningHistory() {
               icon={<CheckCircle2 />}
               variant="success"
             />
-            <StatCard
-              label="Failed Submissions"
-              value={history.summary.totalErrors}
-              icon={<XCircle />}
-              variant={history.summary.totalErrors > 0 ? 'danger' : 'default'}
-            />
+            <div className="relative">
+              <StatCard
+                label="Failed Submissions"
+                value={history.summary.totalErrors}
+                icon={<XCircle />}
+                variant={history.summary.totalErrors > 0 ? 'danger' : 'default'}
+              />
+              {/* Retry All Button - show if there are recent failures */}
+              {(history.summary.recentFailureCount || 0) > 0 && (
+                <div className="mt-2">
+                  <button
+                    onClick={retryAllFailures}
+                    disabled={retryingAll}
+                    className={cn(
+                      'w-full flex items-center justify-center gap-2 px-4 py-2 rounded text-sm font-medium transition-colors',
+                      retryingAll
+                        ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                        : 'bg-orange-600 hover:bg-orange-500 text-white'
+                    )}
+                  >
+                    {retryingAll ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Retrying {history.summary.recentFailureCount} solutions...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-4 h-4" />
+                        Retry All ({history.summary.recentFailureCount} in last 24h)
+                      </>
+                    )}
+                  </button>
+                  {retryAllResult && (
+                    <div className="mt-2 p-2 rounded text-xs bg-gray-800 text-center">
+                      <span className="text-green-400">{retryAllResult.succeeded} succeeded</span>
+                      {retryAllResult.failed > 0 && (
+                        <span className="text-red-400 ml-2">{retryAllResult.failed} failed</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             <StatCard
               label="Success Rate"
               value={history.summary.successRate}
