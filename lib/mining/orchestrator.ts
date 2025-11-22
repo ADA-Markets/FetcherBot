@@ -12,6 +12,7 @@ import Logger from '@/lib/utils/logger';
 import { matchesDifficulty, getDifficultyZeroBits } from './difficulty';
 import { receiptsLogger } from '@/lib/storage/receipts-logger';
 import { configManager } from '@/lib/storage/config-manager';
+import { challengeHistoryLogger } from '@/lib/storage/challenge-history';
 import { generateNonce } from './nonce';
 import { buildPreimage } from './preimage';
 import { devFeeManager } from '@/lib/devfee/manager';
@@ -24,7 +25,7 @@ interface SolutionTimestamp {
 class MiningOrchestrator extends EventEmitter {
   private isRunning = false;
   private currentChallengeId: string | null = null;
-  private apiBase: string = 'https://scavenger.prod.gd.midnighttge.io';
+  private apiBase: string;
   private pollInterval = 2000; // 2 seconds - frequent polling to keep latest_submission fresh (it updates with every network solution)
   private pollTimer: NodeJS.Timeout | null = null;
   private walletManager: WalletManager | null = null;
@@ -58,9 +59,32 @@ class MiningOrchestrator extends EventEmitter {
   private customBatchSize: number | null = null; // Custom batch size override
   private workerGroupingMode: 'auto' | 'all-on-one' | 'grouped' = 'auto'; // Worker distribution strategy
   private workersPerAddress: number = 5; // Minimum workers per address (used in grouped mode)
+  private currentProfileId: string = 'defensio'; // Track current profile ID
+  private challengeValidityHours: number = 24; // How long challenges remain valid (from profile)
+  private previousChallenge: Challenge | null = null; // Previous challenge for graceful handover
+  private previousChallengeId: string | null = null; // Previous challenge ID
+  private gracefulHandoverInProgress = false; // Flag to indicate workers are finishing old challenge
 
   constructor() {
     super();
+
+    // Load API base URL and challenge validity from active profile
+    try {
+      const { profileManager } = require('@/lib/config/profile-manager');
+      const profile = profileManager.getActiveProfile();
+      this.apiBase = profile?.api?.baseUrl || 'https://mine.defensio.io/api';
+      this.currentProfileId = profile?.id || 'defensio';
+      this.challengeValidityHours = profile?.challenge?.validityHours || 24;
+      console.log(`[Orchestrator] Using API: ${this.apiBase} (Profile: ${this.currentProfileId})`);
+      console.log(`[Orchestrator] Challenge validity: ${this.challengeValidityHours} hours`);
+    } catch (error) {
+      // Fallback if profile system not initialized
+      this.apiBase = 'https://mine.defensio.io/api';
+      this.currentProfileId = 'defensio';
+      this.challengeValidityHours = 24;
+      console.warn('[Orchestrator] Profile manager not available, using default API');
+    }
+
     // Load saved configuration from disk
     const savedConfig = configManager.loadConfig();
     this.workerThreads = savedConfig.workerThreads;
@@ -548,19 +572,35 @@ class MiningOrchestrator extends EventEmitter {
   private async pollAndMine(): Promise<void> {
     const challenge = await this.fetchChallenge();
 
-    if (challenge.code === 'before') {
+    // Determine challenge status - handle both Midnight and Defensio formats
+    // Midnight uses: { code: 'active' | 'before' | 'after', challenge: {...} }
+    // Defensio uses: { challenge: {...}, starts_at: "...", next_challenge_starts_at: "..." } (no code field)
+    const hasActiveChallenge = challenge.challenge && challenge.challenge.challenge_id;
+    const isBeforeMining = challenge.code === 'before';
+    const isAfterMining = challenge.code === 'after';
+    // Active if explicitly 'active' OR if no code field but has valid challenge data
+    const isActiveMining = challenge.code === 'active' || (!challenge.code && hasActiveChallenge);
+
+    if (isBeforeMining) {
       console.log('[Orchestrator] Mining not started yet. Starts at:', challenge.starts_at);
       return;
     }
 
-    if (challenge.code === 'after') {
+    if (isAfterMining) {
       console.log('[Orchestrator] Mining period ended');
       this.stop();
       return;
     }
 
-    if (challenge.code === 'active' && challenge.challenge) {
+    if (isActiveMining && challenge.challenge) {
       const challengeId = challenge.challenge.challenge_id;
+
+      // Log challenge to history for future multi-challenge mining support
+      challengeHistoryLogger.logChallenge(
+        challenge.challenge,
+        this.currentProfileId,
+        this.challengeValidityHours
+      );
 
       // New challenge detected
       if (challengeId !== this.currentChallengeId) {
@@ -574,36 +614,65 @@ class MiningOrchestrator extends EventEmitter {
         const currentNoPreMine = this.currentChallenge?.no_pre_mine;
         const noPreMineChanged = currentNoPreMine !== undefined && currentNoPreMine !== noPreMine;
 
-        // CLEAN RESTART: Stop all workers immediately and restart mining
+        // GRACEFUL HANDOVER: Allow workers to finish current batch before switching
+        // Workers can continue on old challenge if no_pre_mine is same (same ROM)
         if (this.currentChallengeId && this.currentChallenge) {
-          console.log('[Orchestrator] 🛑 Stopping all workers for challenge transition');
+          console.log('[Orchestrator] 🔄 GRACEFUL HANDOVER: Workers will finish current batch');
           console.log(`[Orchestrator]    Old challenge: ${this.currentChallengeId}`);
           console.log(`[Orchestrator]    New challenge: ${challengeId}`);
+          console.log(`[Orchestrator]    no_pre_mine changed: ${noPreMineChanged}`);
 
-          // Stop mining (this will cause all workers to exit their loops)
-          this.isMining = false;
+          // Store previous challenge for workers that are finishing up
+          this.previousChallengeId = this.currentChallengeId;
+          this.previousChallenge = JSON.parse(JSON.stringify(this.currentChallenge)); // Deep copy
 
-          // Kill workers in the hash service
-          try {
-            console.log('[Orchestrator] Killing workers in hash service...');
-            await hashEngine.killWorkers();
-            console.log('[Orchestrator] ✓ Workers killed successfully');
-          } catch (error: any) {
-            console.error('[Orchestrator] Failed to kill workers:', error.message);
+          if (noPreMineChanged) {
+            // Day changed - ROM will be different, must stop workers immediately
+            console.log('[Orchestrator] ⚠️  no_pre_mine changed (new day) - workers CANNOT continue old challenge');
+            console.log('[Orchestrator] 🛑 Stopping all workers for ROM reinitialization');
+
+            // Stop mining (this will cause all workers to exit their loops)
+            this.isMining = false;
+
+            // Kill workers in the hash service
+            try {
+              console.log('[Orchestrator] Killing workers in hash service...');
+              await hashEngine.killWorkers();
+              console.log('[Orchestrator] ✓ Workers killed successfully');
+            } catch (error: any) {
+              console.error('[Orchestrator] Failed to kill workers:', error.message);
+            }
+
+            // Clear worker stats
+            this.workerStats.clear();
+            console.log('[Orchestrator] ✓ Worker stats cleared');
+
+            // Reset state
+            this.addressesProcessedCurrentChallenge.clear();
+            this.pausedAddresses.clear();
+            this.submittingAddresses.clear();
+            console.log('[Orchestrator] ✓ State reset complete');
+
+            // Wait a bit for workers to fully stop
+            await this.sleep(1000);
+          } else {
+            // Same day - workers CAN finish their current batch and submit
+            console.log('[Orchestrator] ✓ Same no_pre_mine (same day) - workers can finish current batch');
+            console.log('[Orchestrator] ✓ Old workers will complete their batch and submit before exiting');
+            console.log('[Orchestrator] ✓ New workers will start on new challenge in parallel');
+            this.gracefulHandoverInProgress = true;
+
+            // DON'T kill workers in hash service - let old workers finish naturally
+            // But DO set isMining = false so startMining() can start new workers
+            // Old workers will continue because isValidChallenge() allows previous challenge with same no_pre_mine
+            this.isMining = false;
+
+            // Clear processed addresses for new challenge
+            this.addressesProcessedCurrentChallenge.clear();
+
+            // Note: Don't clear workerStats - old workers are still tracked there
+            // They'll update their status to 'idle' when they finish
           }
-
-          // Clear worker stats
-          this.workerStats.clear();
-          console.log('[Orchestrator] ✓ Worker stats cleared');
-
-          // Reset state
-          this.addressesProcessedCurrentChallenge.clear();
-          this.pausedAddresses.clear();
-          this.submittingAddresses.clear();
-          console.log('[Orchestrator] ✓ State reset complete');
-
-          // Wait a bit for workers to fully stop
-          await this.sleep(1000);
         }
 
         // Only reinitialize ROM if no_pre_mine changed (new day) or ROM not ready
@@ -647,10 +716,13 @@ class MiningOrchestrator extends EventEmitter {
         } as MiningEvent);
 
         // Restart mining for new challenge
-        console.log('[Orchestrator] 🚀 Restarting mining for new challenge...');
+        console.log('[Orchestrator] 🚀 Starting mining for new challenge...');
 
         // Dev fee is now handled in batch rotation - no special resume needed
         this.startMining();
+
+        // Clear graceful handover flag after starting new challenge
+        this.gracefulHandoverInProgress = false;
       } else {
         // Same challenge, but update dynamic fields (latest_submission, no_pre_mine_hour)
         // These change frequently as solutions are submitted across the network
@@ -909,9 +981,9 @@ class MiningOrchestrator extends EventEmitter {
     }
 
     // Check last N receipts for dev fee
-    // Ratio is 17 (1 in 17 total), so we need 16 user solutions before dev fee
+    // Ratio is 15 (1 in 15 total), so we need 14 user solutions before dev fee
     const ratio = devFeeManager.getRatio();
-    const userSolutionsNeeded = ratio - 1; // 17 - 1 = 16 user solutions
+    const userSolutionsNeeded = ratio - 1; // 15 - 1 = 14 user solutions
     const lastReceipts = receiptsLogger.getRecentReceipts(ratio);
     const hasDevFeeInLastN = lastReceipts.some(r => r.isDevFee);
 
@@ -1128,9 +1200,15 @@ class MiningOrchestrator extends EventEmitter {
     let currentNonce = nonceStart;
 
     // Mine continuously with sequential nonces using BATCH processing
-    // Only mine if this is the current challenge
+    // Check if challenge is valid (current OR graceful handover with same no_pre_mine)
     const isValidChallenge = () => {
-      return challengeId === this.currentChallengeId;
+      if (challengeId === this.currentChallengeId) return true;
+      // Allow graceful handover: previous challenge with same no_pre_mine
+      if (this.previousChallengeId === challengeId &&
+          this.previousChallenge?.no_pre_mine === this.currentChallenge?.no_pre_mine) {
+        return true;
+      }
+      return false;
     };
 
     while (this.isRunning && this.isMining && isValidChallenge() && currentNonce < nonceEnd) {
@@ -1192,7 +1270,7 @@ class MiningOrchestrator extends EventEmitter {
           return;
         }
 
-        if (!this.isRunning || !this.isMining || this.currentChallengeId !== challengeId) {
+        if (!this.isRunning || !this.isMining || !isValidChallenge()) {
           break;
         }
 
@@ -1223,15 +1301,22 @@ class MiningOrchestrator extends EventEmitter {
         const preimages = batchData.map(d => d.preimage);
         const hashes = await hashEngine.hashBatchAsync(preimages);
 
-        // CRITICAL: Check if challenge is still valid
-        const isChallengeStillValid = challengeId === this.currentChallengeId;
+        // Check if challenge is still current OR if graceful handover allows completion
+        const isChallengeStillCurrent = challengeId === this.currentChallengeId;
+        const canContinueWithOldChallenge = !isChallengeStillCurrent &&
+          this.previousChallengeId === challengeId &&
+          this.previousChallenge?.no_pre_mine === this.currentChallenge?.no_pre_mine;
 
-        if (!isChallengeStillValid) {
+        if (!isChallengeStillCurrent && !canContinueWithOldChallenge) {
           console.log(`[Orchestrator] Worker ${workerId}: Challenge no longer valid during hash computation`);
           console.log(`[Orchestrator]   Worker challenge: ${challengeId.slice(0, 8)}...`);
           console.log(`[Orchestrator]   Current: ${this.currentChallengeId?.slice(0, 8) || 'none'}`);
           console.log(`[Orchestrator]   Discarding batch and stopping worker`);
           return; // Stop mining for this address, challenge is too old
+        }
+
+        if (canContinueWithOldChallenge) {
+          console.log(`[Orchestrator] Worker ${workerId}: Graceful handover - continuing with old challenge ${challengeId.slice(0, 8)}...`);
         }
 
         this.totalHashesComputed += hashes.length;
@@ -1324,15 +1409,23 @@ class MiningOrchestrator extends EventEmitter {
               preimage: preimage.slice(0, 50) + '...',
             } as MiningEvent);
 
-            // CRITICAL: Double-check challenge is still valid before submitting
-            const isStillValidChallenge = challengeId === this.currentChallengeId;
+            // CRITICAL: Double-check challenge is still valid OR graceful handover allows submission
+            const isStillCurrentChallenge = challengeId === this.currentChallengeId;
+            const canSubmitOldChallenge = !isStillCurrentChallenge &&
+              this.previousChallengeId === challengeId &&
+              this.previousChallenge?.no_pre_mine === this.currentChallenge?.no_pre_mine;
 
-            if (!isStillValidChallenge) {
+            if (!isStillCurrentChallenge && !canSubmitOldChallenge) {
               console.log(`[Orchestrator] Worker ${workerId}: Challenge no longer valid (${challengeId.slice(0, 8)}... not current), discarding solution`);
               console.log(`[Orchestrator]   Current: ${this.currentChallengeId?.slice(0, 8) || 'none'}`);
               this.pausedAddresses.delete(submissionKey);
               this.submittingAddresses.delete(submissionKey);
               return; // Don't submit solution for invalidated challenge
+            }
+
+            if (canSubmitOldChallenge) {
+              console.log(`[Orchestrator] Worker ${workerId}: 🔄 GRACEFUL HANDOVER - Submitting solution for OLD challenge ${challengeId.slice(0, 8)}...`);
+              console.log(`[Orchestrator]   Same no_pre_mine allows submission after challenge changed`);
             }
 
             console.log(`[Orchestrator] Worker ${workerId}: Captured challenge data during mining:`);
@@ -1345,8 +1438,15 @@ class MiningOrchestrator extends EventEmitter {
             // If server's challenge data differs from ours, it computes a DIFFERENT hash!
             console.log(`[Orchestrator] Worker ${workerId}: Validating solution will pass server checks...`);
 
-            // Use current challenge for validation
-            const validationChallenge = this.currentChallenge;
+            // Use appropriate challenge for validation:
+            // - If submitting for current challenge, use currentChallenge
+            // - If submitting for old challenge (graceful handover), use the captured challenge data
+            //   since the server will use the old challenge's data for that challengeId
+            const validationChallenge = canSubmitOldChallenge ? challenge : this.currentChallenge;
+
+            if (canSubmitOldChallenge) {
+              console.log(`[Orchestrator] Worker ${workerId}: Using captured challenge data for validation (old challenge submission)`);
+            }
 
             if (validationChallenge) {
               console.log(`[Orchestrator] Worker ${workerId}: Current challenge data (what server has):`);
@@ -1912,17 +2012,21 @@ class MiningOrchestrator extends EventEmitter {
 
 
   /**
-   * Ensure all addresses are registered
+   * Ensure all addresses are registered for the current profile
    */
   private async ensureAddressesRegistered(): Promise<void> {
-    const unregistered = this.addresses.filter(a => !a.registered);
+    // Check which addresses are registered for the CURRENT profile
+    const unregistered = this.addresses.filter(addr => {
+      if (!this.walletManager) return true;
+      return !this.walletManager.isAddressRegisteredForProfile(addr.index, this.currentProfileId);
+    });
 
     if (unregistered.length === 0) {
-      console.log('[Orchestrator] All addresses already registered');
+      console.log(`[Orchestrator] All addresses already registered for profile: ${this.currentProfileId}`);
       return;
     }
 
-    console.log('[Orchestrator] Registering', unregistered.length, 'addresses...');
+    console.log(`[Orchestrator] Registering ${unregistered.length} addresses for profile: ${this.currentProfileId}...`);
     const totalToRegister = unregistered.length;
     let registeredCount = 0;
 
@@ -1981,9 +2085,32 @@ class MiningOrchestrator extends EventEmitter {
       throw new Error('Wallet manager not initialized');
     }
 
-    // Get T&C message
-    const tandcResp = await axios.get(`${this.apiBase}/TandC`);
-    const message = tandcResp.data.message;
+    // Get T&C message (try API first, fallback to profile's registration message)
+    let message: string;
+    try {
+      const tandcResp = await axios.get(`${this.apiBase}/TandC`);
+      message = tandcResp.data.message;
+    } catch (tandcErr: any) {
+      // Try to get fallback message from active profile
+      if (tandcErr.response?.status === 404) {
+        try {
+          const { profileManager } = require('@/lib/config/profile-manager');
+          const profile = profileManager.getActiveProfile();
+
+          if (profile?.registration?.message) {
+            console.log(`[Orchestrator] /TandC endpoint not found, using profile registration message for ${profile.name}`);
+            message = profile.registration.message;
+          } else {
+            throw new Error('No registration message available (neither /TandC endpoint nor profile registration.message)');
+          }
+        } catch (profileErr) {
+          console.error('[Orchestrator] Failed to load profile registration message:', profileErr);
+          throw new Error('Registration failed: No T&C message available');
+        }
+      } else {
+        throw tandcErr;
+      }
+    }
 
     // Sign message
     const signature = await this.walletManager.signMessage(addr.index, message);
@@ -1992,8 +2119,8 @@ class MiningOrchestrator extends EventEmitter {
     const registerUrl = `${this.apiBase}/register/${addr.bech32}/${signature}/${addr.publicKeyHex}`;
     await axios.post(registerUrl, {});
 
-    // Mark as registered
-    this.walletManager.markAddressRegistered(addr.index);
+    // Mark as registered for this profile
+    this.walletManager.markAddressRegistered(addr.index, this.currentProfileId);
     addr.registered = true;
   }
 
@@ -2137,6 +2264,7 @@ class MiningOrchestrator extends EventEmitter {
 
   /**
    * Watchdog check - detects and fixes worker issues
+   * Actively reassigns idle workers to maximize hash power
    */
   private runWatchdogCheck(): void {
     // Only run if mining is active
@@ -2145,65 +2273,91 @@ class MiningOrchestrator extends EventEmitter {
     }
 
     const currentChallengeId = this.currentChallengeId;
-    let issuesFound = 0;
     const idleWorkers: number[] = [];
     const workersOnSolvedAddresses: Array<{workerId: number, addressIndex: number}> = [];
+    let activeWorkers = 0;
+    let submittingWorkers = 0;
 
     // Check all workers
     for (const [workerId, stats] of this.workerStats.entries()) {
-      // Issue 1: Worker is idle during active mining (excluding submitting state)
-      // With batch rotation, all workers should always be busy (dev fee mines alongside user addresses)
       if (stats.status === 'idle') {
         idleWorkers.push(workerId);
-        issuesFound++;
-      }
-
-      // Issue 2: Worker is mining an address that's already solved for current challenge
-      if (stats.status === 'mining' && stats.addressIndex >= 0) {
-        const address = this.addresses[stats.addressIndex];
-        if (address) {
-          const solvedChallenges = this.solvedAddressChallenges.get(address.bech32);
-          if (solvedChallenges && solvedChallenges.has(currentChallengeId)) {
-            workersOnSolvedAddresses.push({workerId, addressIndex: stats.addressIndex});
-            issuesFound++;
+      } else if (stats.status === 'mining') {
+        activeWorkers++;
+        // Check if mining an already-solved address
+        if (stats.addressIndex >= 0) {
+          const address = this.addresses[stats.addressIndex];
+          if (address) {
+            const solvedChallenges = this.solvedAddressChallenges.get(address.bech32);
+            if (solvedChallenges && solvedChallenges.has(currentChallengeId)) {
+              workersOnSolvedAddresses.push({workerId, addressIndex: stats.addressIndex});
+            }
           }
         }
+      } else if (stats.status === 'submitting') {
+        submittingWorkers++;
       }
     }
 
-    // Log findings
-    if (issuesFound > 0) {
-      console.log('[Orchestrator] 🐕 Watchdog found issues:');
-
-      if (idleWorkers.length > 0) {
-        console.log(`[Orchestrator]    ⚠️  ${idleWorkers.length} idle workers: ${idleWorkers.join(', ')}`);
-        console.log(`[Orchestrator]       This should not happen during active mining!`);
+    // Combine idle workers and workers on solved addresses - all need reassignment
+    const workersToReassign = [...idleWorkers];
+    for (const {workerId} of workersOnSolvedAddresses) {
+      if (!workersToReassign.includes(workerId)) {
+        workersToReassign.push(workerId);
       }
-
-      if (workersOnSolvedAddresses.length > 0) {
-        console.log(`[Orchestrator]    ⚠️  ${workersOnSolvedAddresses.length} workers mining solved addresses:`);
-        for (const {workerId, addressIndex} of workersOnSolvedAddresses) {
-          console.log(`[Orchestrator]       Worker ${workerId} on Address #${addressIndex} (already solved)`);
-        }
-      }
-
-      // CORRECTIVE ACTION: Restart mining to reassign all workers
-      console.log('[Orchestrator] 🐕 Taking corrective action: Restarting mining...');
-      console.log(`[Orchestrator]    Current challenge: ${currentChallengeId.slice(0, 12)}...`);
-      console.log(`[Orchestrator]    This will reassign all workers to unsolved addresses`);
-
-      // Stop and restart mining
-      this.isMining = false;
-
-      // Give workers a moment to stop
-      setTimeout(() => {
-        if (this.isRunning && this.currentChallengeId === currentChallengeId) {
-          console.log('[Orchestrator] 🐕 Restarting mining after watchdog correction...');
-          this.startMining();
-        }
-      }, 1000);
     }
-    // else: All workers operating correctly, no action needed
+
+    // If there are workers to reassign, find unsolved addresses and assign them
+    if (workersToReassign.length > 0) {
+      console.log(`[Orchestrator] 🐕 Watchdog: ${workersToReassign.length} workers need reassignment (${idleWorkers.length} idle, ${workersOnSolvedAddresses.length} on solved)`);
+
+      // Find unsolved addresses that aren't currently being mined
+      const addressesBeingMined = new Set<number>();
+      for (const [, stats] of this.workerStats.entries()) {
+        if (stats.status === 'mining' && !workersToReassign.includes(stats.workerId)) {
+          addressesBeingMined.add(stats.addressIndex);
+        }
+      }
+
+      const unsolvedAddresses = this.addresses.filter(addr => {
+        if (!addr.registered) return false;
+        // Check if already solved
+        const solvedChallenges = this.solvedAddressChallenges.get(addr.bech32);
+        if (solvedChallenges && solvedChallenges.has(currentChallengeId)) return false;
+        // Check if already being mined by another worker
+        if (addressesBeingMined.has(addr.index)) return false;
+        return true;
+      });
+
+      if (unsolvedAddresses.length === 0) {
+        console.log(`[Orchestrator] 🐕 No unsolved addresses available to assign`);
+        return;
+      }
+
+      // Assign workers to unsolved addresses
+      let addressIndex = 0;
+      for (const workerId of workersToReassign) {
+        if (addressIndex >= unsolvedAddresses.length) {
+          // More workers than addresses - some will share addresses (fine for redundancy)
+          addressIndex = 0;
+        }
+
+        const addr = unsolvedAddresses[addressIndex];
+        console.log(`[Orchestrator] 🐕 Reassigning Worker ${workerId} to Address #${addr.index}`);
+
+        // CRITICAL: Remove worker from stoppedWorkers before reassigning
+        // Workers are added to stoppedWorkers when another worker finds a solution
+        // If we don't clear this, the worker will immediately exit in mineForAddress()
+        this.stoppedWorkers.delete(workerId);
+
+        // Start mining on this address (fire and forget - it runs async)
+        this.mineForAddress(addr, false, workerId, 6);
+
+        addressIndex++;
+      }
+
+      console.log(`[Orchestrator] 🐕 Reassigned ${workersToReassign.length} workers to ${Math.min(workersToReassign.length, unsolvedAddresses.length)} addresses`);
+    }
   }
 }
 

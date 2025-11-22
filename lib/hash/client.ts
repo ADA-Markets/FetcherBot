@@ -71,8 +71,9 @@ export class HashClient {
       });
 
       const workerPid = response.data.worker_pid;
+      const workers = response.data.workers || 'auto';
       console.log(`[HashClient] ✓ Hash server initialized (PID ${workerPid})`);
-      console.log(`[HashClient] ✓ ROM ready with 8 actix-web workers + rayon thread pool`);
+      console.log(`[HashClient] ✓ ROM ready with ${workers} actix-web workers + rayon thread pool`);
 
       this.romInitialized = true;
     } catch (err: any) {

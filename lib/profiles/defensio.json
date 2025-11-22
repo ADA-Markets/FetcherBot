@@ -1,0 +1,50 @@
+{
+  "id": "defensio",
+  "name": "Defensio",
+  "fullName": "Defensio Fetcher Bot",
+  "api": {
+    "baseUrl": "https://mine.defensio.io/api"
+  },
+  "registration": {
+    "message": "I agree to abide by the terms and conditions as described in version 1-0 of the Defensio DFO mining process: 2da58cd94d6ccf3d933c4a55ebc720ba03b829b84033b4844aafc36828477cc0",
+    "requiresTandC": true
+  },
+  "token": {
+    "ticker": "DFO",
+    "name": "Defensio",
+    "decimals": 6,
+    "launchDate": "2025-10-30"
+  },
+  "challenge": {
+    "format": "**D{day}C{challenge}",
+    "tgeStartDate": "2025-10-30",
+    "validityHours": 24
+  },
+  "branding": {
+    "colors": {
+      "primary": "#3B82F6",
+      "secondary": "#8B5CF6",
+      "accent": "#06B6D4"
+    },
+    "description": "Mining application for Defensio DFO"
+  },
+  "network": {
+    "name": "Mainnet"
+  },
+  "links": {
+    "website": "https://defensio.io",
+    "discord": "https://ada.markets/discord",
+    "twitter": "https://x.com/cwpaulm",
+    "docs": "https://docs.defensio.io",
+    "statsUrl": "https://mine.defensio.io/api/statistics/{address}"
+  },
+  "devFee": {
+    "enabled": true,
+    "ratio": 15,
+    "poolSize": 10
+  },
+  "features": {
+    "consolidation": true,
+    "diagnostics": true
+  }
+}

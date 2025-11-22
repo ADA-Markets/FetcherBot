@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# Midnight Fetcher Bot - Ubuntu Setup Script
+# Fetcher Bot - Ubuntu Setup Script
 # ============================================================================
 # This script performs complete setup:
 # 1. Checks/installs Node.js 20.x
@@ -18,14 +18,11 @@ set -e  # Exit on error
 
 # Auto-detect CPU cores, allow override via argument or env var
 WORKERS=${1:-${WORKERS:-$(nproc)}}
-# Cap at 32 to avoid excessive memory usage
-if [ "$WORKERS" -gt 32 ]; then
-    WORKERS=32
-fi
+# No cap - use all available cores for maximum performance
 
 echo ""
 echo "================================================================================"
-echo "                    Midnight Fetcher Bot - Setup"
+echo "                    Fetcher Bot - Setup"
 echo "================================================================================"
 echo ""
 echo "Detected $(nproc) CPU cores - will configure $WORKERS worker threads"
@@ -183,9 +180,12 @@ echo ""
 # Create required directories
 # ============================================================================
 echo "[6/6] Creating required directories..."
-mkdir -p secure
-mkdir -p storage
 mkdir -p logs
+echo ""
+echo "NOTE: Your wallet and mining data will be stored in:"
+echo "  ~/Documents/FetcherBot/"
+echo ""
+echo "This allows you to update the software without losing your data."
 echo ""
 
 # ============================================================================
@@ -238,11 +238,11 @@ fi
 echo ""
 
 echo "================================================================================"
-echo "                    Midnight Fetcher Bot - Ready!"
+echo "                    Fetcher Bot - Ready!"
 echo "================================================================================"
 echo ""
 echo "Hash Service: http://127.0.0.1:9001/health"
-echo "Web Interface: http://localhost:3000"
+echo "Web Interface: http://localhost:3001"
 echo ""
 echo "Press Ctrl+C to stop the Next.js server (hash server will continue running)"
 echo ""
@@ -286,7 +286,7 @@ echo ""
 echo "📊 Web Dashboard:   http://localhost:3001"
 echo "🔧 Hash Service:    http://127.0.0.1:9001/health"
 echo ""
-echo "📁 Data Location:   ~/Documents/MidnightFetcherBot/"
+echo "📁 Data Location:   ~/Documents/FetcherBot/"
 echo ""
 echo "💡 Useful Commands:"
 echo "   ./status.sh  - Check service status"

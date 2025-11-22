@@ -1,4 +1,4 @@
-# Midnight Fetcher Bot - Comprehensive Documentation
+# Fetcher Bot - Comprehensive Documentation
 
 ## Table of Contents
 1. [Overview](#overview)
@@ -15,17 +15,19 @@
 
 ## Overview
 
-The Midnight Fetcher Bot is a **Windows-based cryptocurrency mining application** built with **Next.js 16** that mines for the Midnight Network. It features a modern web UI that controls a sophisticated mining orchestration system powered by a native Rust hash engine.
+Fetcher Bot is a **multi-project cryptocurrency mining application** built with **Next.js** that supports various mining projects through a profile-based architecture. It features a modern web UI that controls a sophisticated mining orchestration system powered by a native Rust hash engine.
 
 ### Key Features
-- HD Wallet management with 200 addresses
-- Parallel mining with 11 worker threads
+- **Multi-Project Support** - Switch between different mining projects
+- HD Wallet management with 200 addresses per project
+- Parallel mining with configurable worker threads
 - Real-time dashboard with Server-Sent Events
 - Native Rust hash engine for maximum performance
 - Automatic address registration
-- Development fee system (4.17%)
+- Development fee system (configurable per project)
 - Secure seed phrase encryption (AES-256-GCM)
 - Mining receipts logging
+- Reward consolidation
 
 ---
 
@@ -78,9 +80,9 @@ The Midnight Fetcher Bot is a **Windows-based cryptocurrency mining application*
                  │
 ┌────────────────▼────────────────────────────────────┐
 │       External APIs                                 │
-│  - Midnight Scavenger API                          │
-│    https://scavenger.prod.gd.midnighttge.io        │
+│  - Project Mining APIs (configured per profile)    │
 │  - Dev Fee API (ada.markets)                       │
+│  - Remote Profiles API                             │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -92,7 +94,7 @@ The Midnight Fetcher Bot is a **Windows-based cryptocurrency mining application*
 **The "brain" of the application** - 1600+ lines of sophisticated mining logic.
 
 **Responsibilities:**
-- Polls Midnight API every 2 seconds for active challenges
+- Polls project API every 2 seconds for active challenges
 - Manages 11 parallel worker threads mining the same address
 - Processes 200 addresses sequentially (one at a time)
 - Handles ROM initialization for each new challenge
@@ -152,14 +154,14 @@ The Midnight Fetcher Bot is a **Windows-based cryptocurrency mining application*
 
 **Responsibilities:**
 - Pre-fetches 10 dev fee addresses at startup
-- Calculates dev fee obligations (1 per 24 user solutions = ~4.17%)
+- Calculates dev fee obligations (1 per 15 user solutions = ~6.67%)
 - Round-robin address selection from pool
 - Tracks dev fee solutions
 - Caches addresses in `.devfee_cache.json`
 
 **Formula:**
 ```
-devFeesNeeded = floor(userSolutions / 24) - currentDevFees
+devFeesNeeded = floor(userSolutions / 15) - currentDevFees
 ```
 
 ### 5. Solution Submitter (`lib/mining/solution-submitter.ts`)
@@ -209,7 +211,7 @@ devFeesNeeded = floor(userSolutions / 24) - currentDevFees
 ## Directory Structure
 
 ```
-midnight_fetcher_bot/
+FetcherBot/
 ├── app/                          # Next.js App Router
 │   ├── page.tsx                  # Home page (wallet selection)
 │   ├── layout.tsx                # Root layout
@@ -480,7 +482,7 @@ mineForAddress(address, isDevFee, workerId)
 
 ```
 checkAndMineDevFee()
-├─> Calculate: devFeesNeeded = floor(userSolutions / 24)
+├─> Calculate: devFeesNeeded = floor(userSolutions / 15)
 ├─> Current dev fees = totalDevFeeSolutions
 │
 └─> If devFeesNeeded > 0:
@@ -494,9 +496,9 @@ checkAndMineDevFee()
 ```
 
 **Dev Fee Formula:**
-- Ratio: 1 dev fee per 24 user solutions
-- Percentage: ~4.17%
-- Example: 48 user solutions = 2 dev fees
+- Ratio: 1 dev fee per 15 user solutions
+- Percentage: ~6.67%
+- Example: 45 user solutions = 3 dev fees
 
 ### 6. Hourly Restart Flow
 
@@ -547,7 +549,7 @@ Located in `lib/devfee/manager.ts`:
 {
   enabled: true,
   apiUrl: 'https://miner.ada.markets/api/get-dev-address',
-  ratio: 24,  // 1 in 24 solutions = ~4.17%
+  ratio: 15,  // 1 in 15 solutions = ~6.67%
 }
 ```
 
@@ -855,9 +857,9 @@ Get dev fee status.
 ```json
 {
   "enabled": true,
-  "ratio": 24,
-  "totalDevFees": 2,
-  "userSolutions": 48
+  "ratio": 15,
+  "totalDevFees": 3,
+  "userSolutions": 45
 }
 ```
 

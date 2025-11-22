@@ -2,12 +2,13 @@ import { NextResponse } from 'next/server';
 
 /**
  * Dev Fee API - Returns developer wallet address for fee mining
- * Fetches from external API to keep wallet address dynamic and secure
+ * Note: This endpoint is for legacy compatibility. The main dev fee logic
+ * is handled by lib/devfee/manager.ts which uses https://miner.ada.markets/api/get-dev-address
  */
 export async function GET() {
   try {
-    // TODO: Replace with your actual API endpoint
-    const DEV_FEE_API = process.env.DEV_FEE_API_URL || 'https://api.example.com/devfee';
+    // Dev fee API endpoint - falls back gracefully if unavailable
+    const DEV_FEE_API = process.env.DEV_FEE_API_URL || 'https://miner.ada.markets/api/get-dev-address';
 
     // Fetch dev wallet address from external API
     const response = await fetch(DEV_FEE_API, {

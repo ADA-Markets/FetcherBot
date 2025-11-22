@@ -3,31 +3,37 @@ import path from 'path';
 import { Lucid, toHex } from 'lucid-cardano';
 import { encrypt, decrypt, EncryptedData } from './encryption';
 
-// Determine data directory: Check installation folder first (for existing users),
-// then fall back to Documents folder (for new users and easier updates)
+// Determine data directory: Use profile-aware path resolver if available,
+// otherwise fall back to legacy detection for backwards compatibility
 function determineDataDirectory(): string {
-  const oldSecureDir = path.join(process.cwd(), 'secure');
-  const newDataDir = path.join(
-    process.env.USERPROFILE || process.env.HOME || process.cwd(),
-    'Documents',
-    'MidnightFetcherBot'
-  );
+  try {
+    // Try to use profile-specific path
+    const { pathResolver } = require('@/lib/storage/path-resolver');
+    return pathResolver.getSecureDir();
+  } catch (error) {
+    // Fallback for legacy support
+    const oldSecureDir = path.join(process.cwd(), 'secure');
+    const newDataDir = path.join(
+      process.env.USERPROFILE || process.env.HOME || process.cwd(),
+      'Documents',
+      'FetcherBot'
+    );
 
-  // Check if wallet exists in old location (installation folder)
-  const oldWalletFile = path.join(oldSecureDir, 'wallet-seed.json.enc');
-  if (fs.existsSync(oldWalletFile)) {
-    console.log(`[Wallet] Found existing wallet in installation folder`);
-    console.log(`[Wallet] Using: ${path.join(process.cwd(), 'secure')}`);
-    return process.cwd();
+    // Check if wallet exists in old location (installation folder)
+    const oldWalletFile = path.join(oldSecureDir, 'wallet-seed.json.enc');
+    if (fs.existsSync(oldWalletFile)) {
+      console.log(`[Wallet] Found existing wallet in installation folder`);
+      console.log(`[Wallet] Using: ${path.join(process.cwd(), 'secure')}`);
+      return oldSecureDir;
+    }
+
+    // Otherwise use Documents folder (old default)
+    console.log(`[Wallet] Using Documents folder: ${newDataDir}/secure`);
+    return path.join(newDataDir, 'secure');
   }
-
-  // Otherwise use Documents folder (new default)
-  console.log(`[Wallet] Using Documents folder: ${newDataDir}`);
-  return newDataDir;
 }
 
-const DATA_DIR = determineDataDirectory();
-const SECURE_DIR = path.join(DATA_DIR, 'secure');
+const SECURE_DIR = determineDataDirectory();
 const SEED_FILE = path.join(SECURE_DIR, 'wallet-seed.json.enc');
 const DERIVED_ADDRESSES_FILE = path.join(SECURE_DIR, 'derived-addresses.json');
 
@@ -35,7 +41,8 @@ export interface DerivedAddress {
   index: number;
   bech32: string;
   publicKeyHex: string;
-  registered?: boolean;
+  registered?: boolean;  // Legacy field - kept for backwards compatibility
+  registeredProfiles?: string[];  // Array of profile IDs this address is registered for
 }
 
 export interface WalletInfo {
@@ -218,12 +225,24 @@ export class WalletManager {
   }
 
   /**
-   * Mark address as registered
+   * Mark address as registered for a specific profile
    */
-  markAddressRegistered(index: number): void {
+  markAddressRegistered(index: number, profileId?: string): void {
     const addr = this.derivedAddresses.find(a => a.index === index);
     if (addr) {
+      // Legacy support
       addr.registered = true;
+
+      // New profile-aware tracking
+      if (profileId) {
+        if (!addr.registeredProfiles) {
+          addr.registeredProfiles = [];
+        }
+        if (!addr.registeredProfiles.includes(profileId)) {
+          addr.registeredProfiles.push(profileId);
+        }
+      }
+
       // Save updated addresses
       fs.writeFileSync(
         DERIVED_ADDRESSES_FILE,
@@ -231,6 +250,23 @@ export class WalletManager {
         { mode: 0o600 }
       );
     }
+  }
+
+  /**
+   * Check if address is registered for a specific profile
+   */
+  isAddressRegisteredForProfile(index: number, profileId: string): boolean {
+    const addr = this.derivedAddresses.find(a => a.index === index);
+    if (!addr) return false;
+
+    // Check new profile-aware field first
+    if (addr.registeredProfiles && addr.registeredProfiles.includes(profileId)) {
+      return true;
+    }
+
+    // Fallback to legacy field (assume registered for all profiles if true)
+    // This maintains backwards compatibility
+    return addr.registered === true;
   }
 
   /**

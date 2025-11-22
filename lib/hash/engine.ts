@@ -16,7 +16,7 @@ class HashEngine {
     // Initialize HashClient connection to external hash server
     const hashServiceUrl = process.env.HASH_SERVICE_URL || 'http://127.0.0.1:9001';
     this.hashClient = new HashClient(hashServiceUrl, {
-      maxConnectionsPerUrl: 200, // Supports up to 80-100 concurrent workers
+      maxConnectionsPerUrl: 500, // Supports high-core systems (64+ cores)
       keepAliveTimeout: 60000,
       requestTimeout: 10000,
       maxRetries: 3,

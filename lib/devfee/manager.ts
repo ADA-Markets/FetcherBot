@@ -51,32 +51,38 @@ export class DevFeeManager {
   private cache: DevFeeCache;
 
   constructor(config: Partial<DevFeeConfig> = {}) {
-    // Determine storage directory: Check installation folder first (for existing users),
-    // then fall back to Documents folder (for new users and easier updates)
-    const oldSecureDir = path.join(process.cwd(), 'secure');
-    const newDataDir = path.join(
-      process.env.USERPROFILE || process.env.HOME || process.cwd(),
-      'Documents',
-      'MidnightFetcherBot'
-    );
-
+    // Use profile-aware path resolver
     let secureDir: string;
 
-    // Check if dev fee cache exists in old location (installation folder)
-    const oldCacheFile = path.join(oldSecureDir, '.devfee_cache.json');
-    if (fs.existsSync(oldCacheFile)) {
-      secureDir = oldSecureDir;
-      console.log(`[DevFee] Found existing cache in installation folder`);
-      console.log(`[DevFee] Using: ${secureDir}`);
-    } else {
-      // Otherwise use Documents folder (new default)
-      secureDir = path.join(newDataDir, 'secure');
-      console.log(`[DevFee] Using Documents folder: ${secureDir}`);
-    }
+    try {
+      // Try to use profile-specific path
+      const { pathResolver } = require('@/lib/storage/path-resolver');
+      secureDir = pathResolver.getSecureDir();
+    } catch (error) {
+      // Fallback for legacy support or if profile system not initialized
+      const oldSecureDir = path.join(process.cwd(), 'secure');
+      const newDataDir = path.join(
+        process.env.USERPROFILE || process.env.HOME || process.cwd(),
+        'Documents',
+        'FetcherBot'
+      );
 
-    // Ensure secure directory exists
-    if (!fs.existsSync(secureDir)) {
-      fs.mkdirSync(secureDir, { recursive: true });
+      // Check if dev fee cache exists in old location (installation folder)
+      const oldCacheFile = path.join(oldSecureDir, '.devfee_cache.json');
+      if (fs.existsSync(oldCacheFile)) {
+        secureDir = oldSecureDir;
+        console.log(`[DevFee] Found existing cache in installation folder`);
+        console.log(`[DevFee] Using: ${secureDir}`);
+      } else {
+        // Otherwise use Documents folder (new default)
+        secureDir = path.join(newDataDir, 'secure');
+        console.log(`[DevFee] Using Documents folder: ${secureDir}`);
+      }
+
+      // Ensure secure directory exists
+      if (!fs.existsSync(secureDir)) {
+        fs.mkdirSync(secureDir, { recursive: true });
+      }
     }
 
     // Determine cache file path
@@ -86,7 +92,7 @@ export class DevFeeManager {
     this.config = {
       enabled: config.enabled ?? true,
       apiUrl: config.apiUrl || 'https://miner.ada.markets/api/get-dev-address',
-      ratio: config.ratio ?? 17, // 1 in 17 solutions (~5.88% dev fee)
+      ratio: config.ratio ?? 15, // 1 in 15 solutions (~6.67% dev fee)
       cacheFile,
       clientId: '', // Will be set below
     };
@@ -245,11 +251,23 @@ export class DevFeeManager {
     console.log('[DevFee] Fetching 10 dev fee addresses from API...');
 
     try {
+      // Get active profile ID
+      let profileId = 'unknown';
+      try {
+        const { profileManager } = await import('@/lib/config/profile-manager');
+        const activeProfile = profileManager.getActiveProfile();
+        profileId = activeProfile?.id || 'unknown';
+      } catch (error) {
+        console.warn('[DevFee] Could not load profile manager, using default profileId');
+      }
+
       const response = await axios.post<DevFeeApiResponse>(
         this.config.apiUrl,
         {
           clientId: this.config.clientId,
-          clientType: 'desktop'
+          clientType: 'desktop',
+          profileId: profileId,  // Pass profile ID to API
+          poolSize: 10           // Request 10 addresses
         },
         {
           headers: { 'Content-Type': 'application/json' },

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# Midnight Fetcher Bot - Status Check
+# Fetcher Bot - Status Check
 # ============================================================================
 # Checks if services are running and healthy
 # Usage: ./status.sh
@@ -8,7 +8,7 @@
 
 echo ""
 echo "================================================================================"
-echo "                    Midnight Fetcher Bot - Status"
+echo "                    Fetcher Bot - Status"
 echo "================================================================================"
 echo ""
 
@@ -123,9 +123,10 @@ echo ""
 # ============================================================================
 echo "Wallet Status"
 echo "─────────────────────────────────────────────────────────────────────────────"
-WALLET_DIR="$HOME/Documents/MidnightFetcherBot/secure"
-if [ -f "$WALLET_DIR/wallet-seed.json.enc" ]; then
-    echo "Wallet:   ✓ Found at $WALLET_DIR"
+DATA_DIR="$HOME/Documents/FetcherBot"
+WALLET_COUNT=$(find "$DATA_DIR/projects" -name "wallet-seed.json.enc" 2>/dev/null | wc -l)
+if [ "$WALLET_COUNT" -gt 0 ]; then
+    echo "Wallets:  ✓ Found $WALLET_COUNT project wallet(s) in $DATA_DIR/projects/"
 else
     echo "Wallet:   ℹ️  No wallet created yet"
     echo "          Create one at http://localhost:3001"

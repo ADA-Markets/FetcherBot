@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 import { WalletManager } from '@/lib/wallet/manager';
-
-const API_BASE = 'https://scavenger.prod.gd.midnighttge.io';
+import { profileManager } from '@/lib/config/profile-manager';
 
 interface TestResult {
   endpoint: string;
@@ -16,6 +15,10 @@ interface TestResult {
 }
 
 export async function POST(request: NextRequest) {
+  // Get API base URL from active profile (per request, not at module load time)
+  const profile = profileManager.getActiveProfile();
+  const API_BASE = profile?.api?.baseUrl || 'https://mine.defensio.io/api';
+
   const results: TestResult[] = [];
   let walletManager: WalletManager | null = null;
   let testAddress: any = null;

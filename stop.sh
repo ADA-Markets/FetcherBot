@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# Midnight Fetcher Bot - Stop Services
+# Fetcher Bot - Stop Services
 # ============================================================================
 # Stops hash server and Next.js
 # Usage: ./stop.sh
@@ -8,7 +8,7 @@
 
 echo ""
 echo "================================================================================"
-echo "                    Stopping Midnight Fetcher Bot"
+echo "                    Stopping Fetcher Bot"
 echo "================================================================================"
 echo ""
 

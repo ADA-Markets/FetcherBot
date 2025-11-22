@@ -43,7 +43,7 @@ export async function GET() {
       },
       stats: {
         enabled: false,
-        ratio: 24,
+        ratio: 15,
         addressPoolSize: 0,
         totalDevFeeSolutions: 0,
       },

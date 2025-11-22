@@ -1,7 +1,7 @@
 {
-  "name": "midnight-fetcher-bot",
+  "name": "fetcher-bot",
   "version": "1.0.0",
-  "description": "Windows-based NextJS application for Midnight mining",
+  "description": "Multi-project mining platform built with NextJS",
   "scripts": {
     "dev": "run.cmd",
     "build": "next build",
@@ -11,10 +11,10 @@
     "build:hash": "cd hashengine && cargo build --release --bin hash-server"
   },
   "keywords": [
-    "midnight",
     "mining",
     "cardano",
-    "windows"
+    "defensio",
+    "multi-project"
   ],
   "author": "",
   "license": "MIT",

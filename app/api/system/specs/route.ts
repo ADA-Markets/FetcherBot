@@ -87,11 +87,7 @@ function calculateRecommendations(specs: {
   const { cpuCount, cpuSpeed, totalMemoryGB, currentWorkerThreads, currentBatchSize } = specs;
 
   // Worker threads recommendation
-  // Rule: Use 80% of CPU cores to leave headroom for OS and other processes
-  // Absolute maximum: 20 threads (diminishing returns beyond this for most mining workloads)
-  const ABSOLUTE_MAX_WORKERS = 20;
-
-  // Calculate max workers based on CPU count (use all cores)
+  // Use all available CPU cores for maximum hashing performance
   const maxWorkers = cpuCount;
 
   // Optimal workers (use all cores as optimal)

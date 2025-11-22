@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# Midnight Fetcher Bot - Start Services
+# Fetcher Bot - Start Services
 # ============================================================================
 # Starts hash server and Next.js in background
 # Usage: ./start.sh [workers]
@@ -17,14 +17,11 @@ cd "$(dirname "$0")"
 
 # Auto-detect CPU cores, allow override via argument or env var
 WORKERS=${1:-${WORKERS:-$(nproc)}}
-# Cap at 32 to avoid excessive memory usage
-if [ "$WORKERS" -gt 32 ]; then
-    WORKERS=32
-fi
+# No cap - use all available cores for maximum performance
 
 echo ""
 echo "================================================================================"
-echo "                    Starting Midnight Fetcher Bot"
+echo "                    Starting Fetcher Bot"
 echo "================================================================================"
 echo ""
 echo "Using $WORKERS worker threads (detected $(nproc) CPU cores)"
@@ -130,6 +127,6 @@ echo "   ./status.sh  - Check service status"
 echo "   ./logs.sh    - View live logs"
 echo "   ./stop.sh    - Stop all services"
 echo ""
-echo "📁 Data location:  ~/Documents/MidnightFetcherBot/"
+echo "📁 Data location:  ~/Documents/FetcherBot/"
 echo "================================================================================"
 echo ""

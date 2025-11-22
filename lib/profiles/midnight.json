@@ -1,0 +1,46 @@
+{
+  "id": "midnight",
+  "name": "Midnight",
+  "fullName": "Midnight Fetcher Bot",
+  "status": "ended",
+  "api": {
+    "baseUrl": "https://scavenger.prod.gd.midnighttge.io"
+  },
+  "token": {
+    "ticker": "NIGHT",
+    "name": "Midnight",
+    "decimals": 6,
+    "launchDate": "2025-01-16"
+  },
+  "challenge": {
+    "format": "**D{day}C{challenge}",
+    "tgeStartDate": "2025-01-16",
+    "validityHours": 24
+  },
+  "branding": {
+    "colors": {
+      "primary": "#6366F1",
+      "secondary": "#8B5CF6",
+      "accent": "#EC4899"
+    },
+    "description": "Mining application for Midnight NIGHT token"
+  },
+  "network": {
+    "name": "Mainnet"
+  },
+  "links": {
+    "website": "https://midnight.network",
+    "discord": "https://ada.markets/discord",
+    "twitter": "https://x.com/MidnightNtwrk",
+    "docs": "https://docs.midnight.network"
+  },
+  "devFee": {
+    "enabled": true,
+    "ratio": 15,
+    "poolSize": 10
+  },
+  "features": {
+    "consolidation": true,
+    "diagnostics": true
+  }
+}

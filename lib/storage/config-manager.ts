@@ -23,27 +23,34 @@ class ConfigManager {
   };
 
   constructor() {
-    // Use same storage strategy as receipts: check installation folder first
-    const oldStorageDir = path.join(process.cwd(), 'storage');
-    const newDataDir = path.join(
-      process.env.USERPROFILE || process.env.HOME || process.cwd(),
-      'Documents',
-      'MidnightFetcherBot'
-    );
-
+    // Use profile-aware path resolver if available
     let storageDir: string;
 
-    // Check if receipts exist in old location (installation folder) to stay consistent
-    const oldReceiptsFile = path.join(oldStorageDir, 'receipts.jsonl');
-    if (fs.existsSync(oldReceiptsFile)) {
-      storageDir = oldStorageDir;
-    } else {
-      storageDir = path.join(newDataDir, 'storage');
-    }
+    try {
+      // Try to use profile-specific path
+      const { pathResolver } = require('@/lib/storage/path-resolver');
+      storageDir = pathResolver.getStorageDir();
+    } catch (error) {
+      // Fallback for legacy support
+      const oldStorageDir = path.join(process.cwd(), 'storage');
+      const newDataDir = path.join(
+        process.env.USERPROFILE || process.env.HOME || process.cwd(),
+        'Documents',
+        'FetcherBot'
+      );
 
-    // Ensure storage directory exists
-    if (!fs.existsSync(storageDir)) {
-      fs.mkdirSync(storageDir, { recursive: true });
+      // Check if receipts exist in old location (installation folder) to stay consistent
+      const oldReceiptsFile = path.join(oldStorageDir, 'receipts.jsonl');
+      if (fs.existsSync(oldReceiptsFile)) {
+        storageDir = oldStorageDir;
+      } else {
+        storageDir = path.join(newDataDir, 'storage');
+      }
+
+      // Ensure storage directory exists
+      if (!fs.existsSync(storageDir)) {
+        fs.mkdirSync(storageDir, { recursive: true });
+      }
     }
 
     this.configFile = path.join(storageDir, 'mining-config.json');

@@ -6,11 +6,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 import { consolidationLogger } from '@/lib/storage/consolidation-logger';
-
-const API_BASE = 'https://scavenger.prod.gd.midnighttge.io';
+import { profileManager } from '@/lib/config/profile-manager';
 
 export async function POST(request: NextRequest) {
   try {
+    // Get API base URL from active profile
+    const profile = profileManager.getActiveProfile();
+    const API_BASE = profile?.api?.baseUrl || 'https://mine.defensio.io/api';
+
     const body = await request.json();
     const { sourceAddress, destinationAddress, signature, sourceIndex, destinationIndex, destinationMode } = body;
 

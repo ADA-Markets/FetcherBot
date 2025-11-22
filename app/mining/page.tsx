@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { StatCard } from '@/components/ui/stat-card';
 import { Alert } from '@/components/ui/alert';
 import { Modal } from '@/components/ui/modal';
-import { Play, Square, Home, Loader2, Activity, Clock, Target, Hash, CheckCircle2, Wallet, Terminal, ChevronDown, ChevronUp, Pause, Play as PlayIcon, Maximize2, Minimize2, Cpu, ListChecks, TrendingUp, TrendingDown, Calendar, Copy, Check, XCircle, Users, Award, Zap, MapPin, AlertCircle, Gauge, MemoryStick as Memory, RefreshCw, Settings, Info, ExternalLink } from 'lucide-react';
+import { Play, Square, Home, Loader2, Activity, Clock, Target, Hash, CheckCircle2, Wallet, Terminal, ChevronDown, ChevronUp, Pause, Play as PlayIcon, Maximize2, Minimize2, Cpu, ListChecks, TrendingUp, TrendingDown, Calendar, Copy, Check, XCircle, Users, Award, Zap, MapPin, AlertCircle, Gauge, MemoryStick as Memory, RefreshCw, Settings, Info, ExternalLink, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface WorkerStats {
@@ -101,6 +101,7 @@ function MiningDashboardContent() {
   const [password, setPassword] = useState<string | null>(null);
 
   const [stats, setStats] = useState<MiningStats | null>(null);
+  const [profileInfo, setProfileInfo] = useState<{ id: string; name: string; ticker: string; statsUrl?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -117,8 +118,11 @@ function MiningDashboardContent() {
   const [logHeight, setLogHeight] = useState<'small' | 'medium' | 'large'>('medium');
   const logContainerRef = useRef<HTMLDivElement>(null);
 
-  // Tab state
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'history' | 'rewards' | 'workers' | 'addresses' | 'scale' | 'devfee' | 'consolidate' | 'diagnostics'>('dashboard');
+  // Tab state - consolidated to 5 main tabs
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'activity' | 'workers' | 'consolidate' | 'settings'>('dashboard');
+  // Sub-tab states
+  const [activitySubTab, setActivitySubTab] = useState<'history' | 'addresses'>('history');
+  const [settingsSubTab, setSettingsSubTab] = useState<'performance' | 'diagnostics'>('performance');
   const [history, setHistory] = useState<HistoryData | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<'all' | 'success' | 'error'>('all');
@@ -153,6 +157,7 @@ function MiningDashboardContent() {
   const [rewardsLoading, setRewardsLoading] = useState(false);
   const [rewardsView, setRewardsView] = useState<'hourly' | 'daily'>('daily');
   const [rewardsLastRefresh, setRewardsLastRefresh] = useState<number | null>(null);
+  const [workersView, setWorkersView] = useState<'list' | 'cards'>('list');
 
   // Consolidate state
   const [consolidateLoading, setConsolidateLoading] = useState(false);
@@ -188,7 +193,7 @@ function MiningDashboardContent() {
   // Modal state for consolidation messages
   const [consolidateModal, setConsolidateModal] = useState<{
     open: boolean;
-    type: 'confirm' | 'success' | 'error' | 'password' | 'mode-select';
+    type: 'confirm' | 'success' | 'error' | 'password';
     title: string;
     message: string;
     onConfirm?: () => void;
@@ -216,6 +221,17 @@ function MiningDashboardContent() {
   const [diagnosticsRunning, setDiagnosticsRunning] = useState(false);
   const [diagnosticsResults, setDiagnosticsResults] = useState<any | null>(null);
   const [diagnosticsPassword, setDiagnosticsPassword] = useState<string>('');
+  const [versionInfo, setVersionInfo] = useState<{
+    currentVersion: string;
+    currentCommit: string | null;
+    latestCommit: string | null;
+    latestCommitDate: string | null;
+    latestCommitMessage: string | null;
+    updateAvailable: boolean;
+    checkError: string | null;
+    repoUrl: string;
+  } | null>(null);
+  const [versionLoading, setVersionLoading] = useState(false);
 
   // Helper function to get destination address based on mode
   const getDestinationAddress = (addresses: any[]) => {
@@ -225,6 +241,12 @@ function MiningDashboardContent() {
       const addr = addresses.find((a: any) => a.index === destinationAddressIndex);
       return addr?.bech32 || '';
     }
+  };
+
+  // Helper function to generate address stats URL
+  const getAddressStatsUrl = (address: string): string | null => {
+    if (!profileInfo?.statsUrl || !address) return null;
+    return profileInfo.statsUrl.replace('{address}', address);
   };
 
   // Start consolidation flow with selected mode
@@ -406,7 +428,7 @@ function MiningDashboardContent() {
                 throw new Error('Signature not found for this address');
               }
 
-              // Submit signature to Midnight API
+              // Submit signature to Defensio API
               const donateResponse = await fetch('/api/consolidate/donate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -664,13 +686,14 @@ function MiningDashboardContent() {
           message: data.message,
         });
 
-        // Log registration events
-        if (data.success) {
-          addLog(`✅ ${data.message}`, 'success');
-        } else if (data.message.includes('Failed')) {
+        // Log registration events (only log every 10 addresses or on failure to reduce spam)
+        if (data.message.includes('Failed')) {
           addLog(`❌ ${data.message}`, 'error');
-        } else {
-          addLog(`🔄 ${data.message}`, 'info');
+        } else if (data.success && (data.current % 10 === 0 || data.current === data.total)) {
+          addLog(`📝 Registered ${data.current}/${data.total} addresses...`, 'info');
+        } else if (data.current === 1) {
+          // Log the first registration to show it started
+          addLog(`📝 Starting address registration (${data.total} addresses)...`, 'info');
         }
       } else if (data.type === 'mining_start') {
         addLog(`🔨 Worker ${data.addressIndex}: Starting mining for challenge ${data.challengeId.slice(0, 12)}...`, 'info');
@@ -836,6 +859,11 @@ function MiningDashboardContent() {
 
       setRewardsData(data.stats);
       setRewardsLastRefresh(Date.now());
+
+      // Update profile info if available
+      if (data.profile) {
+        setProfileInfo(data.profile);
+      }
     } catch (err: any) {
       console.error('Failed to fetch rewards:', err);
       addLog(`Failed to load rewards: ${err.message}`, 'error');
@@ -912,6 +940,21 @@ function MiningDashboardContent() {
       setScaleError(err.message || 'Failed to connect to API');
     } finally {
       setScaleLoading(false);
+    }
+  };
+
+  const fetchVersionInfo = async () => {
+    setVersionLoading(true);
+    try {
+      const response = await fetch('/api/version');
+      const data = await response.json();
+      if (data.success) {
+        setVersionInfo(data);
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch version info:', err);
+    } finally {
+      setVersionLoading(false);
     }
   };
 
@@ -1038,10 +1081,10 @@ function MiningDashboardContent() {
     return `${hours}h ${minutes % 60}m ago`;
   };
 
-  // Load history when switching to dashboard or history tab and auto-refresh every 30 seconds
+  // Load history when switching to dashboard or activity tab (history sub-tab) and auto-refresh every 30 seconds
   useEffect(() => {
-    if (activeTab === 'dashboard' || activeTab === 'history') {
-      // Always fetch when switching to dashboard or history tab
+    if (activeTab === 'dashboard' || (activeTab === 'activity' && activitySubTab === 'history')) {
+      // Always fetch when switching to dashboard or history sub-tab
       fetchHistory();
 
       // Set up auto-refresh interval
@@ -1052,35 +1095,40 @@ function MiningDashboardContent() {
       // Cleanup interval when tab changes or component unmounts
       return () => clearInterval(intervalId);
     }
-  }, [activeTab]);
+  }, [activeTab, activitySubTab]);
 
-  // Load rewards when switching to dashboard or rewards tab
+  // Load rewards when switching to dashboard (removed standalone rewards tab)
   useEffect(() => {
-    if (activeTab === 'dashboard' || activeTab === 'rewards') {
+    if (activeTab === 'dashboard') {
       fetchRewards();
     }
   }, [activeTab]);
 
-  // Load addresses when switching to addresses tab
+  // Load addresses when switching to activity tab (addresses sub-tab)
   useEffect(() => {
-    if (activeTab === 'addresses') {
+    if (activeTab === 'activity' && activitySubTab === 'addresses') {
       fetchAddresses();
     }
-  }, [activeTab]);
+  }, [activeTab, activitySubTab]);
 
-  // Load scale data when switching to scale tab
+  // Load scale data when switching to settings tab (performance sub-tab)
   useEffect(() => {
-    if (activeTab === 'scale') {
+    if (activeTab === 'settings' && settingsSubTab === 'performance') {
       fetchScaleData();
     }
-  }, [activeTab]);
+  }, [activeTab, settingsSubTab]);
 
-  // Load dev fee status when switching to devfee tab
+  // Load version info when switching to settings tab (diagnostics sub-tab)
   useEffect(() => {
-    if (activeTab === 'devfee') {
-      fetchDevFeeStatus();
+    if (activeTab === 'settings' && settingsSubTab === 'diagnostics') {
+      fetchVersionInfo();
     }
-  }, [activeTab]);
+  }, [activeTab, settingsSubTab]);
+
+  // Dev fee status is loaded on mount (no standalone tab anymore)
+  useEffect(() => {
+    fetchDevFeeStatus();
+  }, []);
 
   // Load addresses and consolidation history when switching to consolidate tab
   useEffect(() => {
@@ -1179,6 +1227,15 @@ function MiningDashboardContent() {
               </Button>
             )}
             <Button
+              onClick={() => router.push('/select-profile')}
+              variant="outline"
+              size="md"
+              className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 hover:border-purple-500/50"
+            >
+              <Sparkles className="w-4 h-4" />
+              Switch Project
+            </Button>
+            <Button
               onClick={() => {
                 // Clear password from sessionStorage when leaving
                 sessionStorage.removeItem('walletPassword');
@@ -1193,7 +1250,7 @@ function MiningDashboardContent() {
           </div>
         </div>
 
-        {/* Tab Navigation */}
+        {/* Tab Navigation - Consolidated 5 Tabs */}
         <div className="flex gap-2 border-b border-gray-700">
           <button
             onClick={() => setActiveTab('dashboard')}
@@ -1211,32 +1268,17 @@ function MiningDashboardContent() {
             )}
           </button>
           <button
-            onClick={() => setActiveTab('history')}
+            onClick={() => setActiveTab('activity')}
             className={cn(
               'px-6 py-3 font-medium transition-colors relative',
-              activeTab === 'history'
+              activeTab === 'activity'
                 ? 'text-blue-400'
                 : 'text-gray-400 hover:text-gray-300'
             )}
           >
             <Calendar className="w-4 h-4 inline mr-2" />
-            History
-            {activeTab === 'history' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-400" />
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('rewards')}
-            className={cn(
-              'px-6 py-3 font-medium transition-colors relative',
-              activeTab === 'rewards'
-                ? 'text-blue-400'
-                : 'text-gray-400 hover:text-gray-300'
-            )}
-          >
-            <TrendingUp className="w-4 h-4 inline mr-2" />
-            Rewards
-            {activeTab === 'rewards' && (
+            Activity
+            {activeTab === 'activity' && (
               <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-400" />
             )}
           </button>
@@ -1256,51 +1298,6 @@ function MiningDashboardContent() {
             )}
           </button>
           <button
-            onClick={() => setActiveTab('addresses')}
-            className={cn(
-              'px-6 py-3 font-medium transition-colors relative',
-              activeTab === 'addresses'
-                ? 'text-blue-400'
-                : 'text-gray-400 hover:text-gray-300'
-            )}
-          >
-            <MapPin className="w-4 h-4 inline mr-2" />
-            Addresses
-            {activeTab === 'addresses' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-400" />
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('scale')}
-            className={cn(
-              'px-6 py-3 font-medium transition-colors relative',
-              activeTab === 'scale'
-                ? 'text-blue-400'
-                : 'text-gray-400 hover:text-gray-300'
-            )}
-          >
-            <Gauge className="w-4 h-4 inline mr-2" />
-            Scale
-            {activeTab === 'scale' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-400" />
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('devfee')}
-            className={cn(
-              'px-6 py-3 font-medium transition-colors relative',
-              activeTab === 'devfee'
-                ? 'text-blue-400'
-                : 'text-gray-400 hover:text-gray-300'
-            )}
-          >
-            <Award className="w-4 h-4 inline mr-2" />
-            Dev Fee
-            {activeTab === 'devfee' && (
-              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-400" />
-            )}
-          </button>
-          <button
             onClick={() => setActiveTab('consolidate')}
             className={cn(
               'px-6 py-3 font-medium transition-colors relative',
@@ -1316,17 +1313,17 @@ function MiningDashboardContent() {
             )}
           </button>
           <button
-            onClick={() => setActiveTab('diagnostics')}
+            onClick={() => setActiveTab('settings')}
             className={cn(
               'px-6 py-3 font-medium transition-colors relative',
-              activeTab === 'diagnostics'
+              activeTab === 'settings'
                 ? 'text-blue-400'
                 : 'text-gray-400 hover:text-gray-300'
             )}
           >
-            <Activity className="w-4 h-4 inline mr-2" />
-            Diagnostics
-            {activeTab === 'diagnostics' && (
+            <Settings className="w-4 h-4 inline mr-2" />
+            Settings
+            {activeTab === 'settings' && (
               <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-400" />
             )}
           </button>
@@ -1399,7 +1396,7 @@ function MiningDashboardContent() {
                     </div>
                     <div className="grid grid-cols-2 gap-3 text-sm">
                       <div>
-                        <p className="text-gray-400">Last Hour</p>
+                        <p className="text-gray-400">Previous Hour</p>
                         <p className="text-lg font-semibold text-white">
                           {history?.receipts.filter((r: ReceiptEntry) => {
                             const receiptTime = new Date(r.ts).getTime();
@@ -1480,12 +1477,11 @@ function MiningDashboardContent() {
                 <Card variant="bordered">
                   <CardContent className="p-4">
                     <div className="flex items-center gap-3">
-                      <TrendingUp className={`w-6 h-6 ${stats.solutionsThisHour >= stats.solutionsPreviousHour ? 'text-green-400' : 'text-gray-400'}`} />
+                      <TrendingUp className="w-6 h-6 text-green-400" />
                       <div>
-                        <p className="text-sm text-gray-500">Hourly Trend</p>
+                        <p className="text-sm text-gray-500">Avg/Hour (24h)</p>
                         <p className="text-lg font-semibold text-white">
-                          {stats.solutionsThisHour >= stats.solutionsPreviousHour ? '+' : ''}
-                          {stats.solutionsThisHour - stats.solutionsPreviousHour}
+                          {rewardsData?.rate?.perHour24h?.toFixed(1) || '0.0'}
                         </p>
                       </div>
                     </div>
@@ -1497,15 +1493,9 @@ function MiningDashboardContent() {
                     <div className="flex items-center gap-3">
                       <Activity className="w-6 h-6 text-blue-400" />
                       <div>
-                        <p className="text-sm text-gray-500">Avg Per Hour</p>
+                        <p className="text-sm text-gray-500">Previous Hour</p>
                         <p className="text-lg font-semibold text-white">
-                          {(() => {
-                            const now = new Date();
-                            const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-                            const hoursElapsed = Math.max(1, (now.getTime() - startOfDay) / (1000 * 60 * 60));
-                            const avgPerHour = stats.solutionsToday / hoursElapsed;
-                            return avgPerHour.toFixed(1);
-                          })()}
+                          {rewardsData?.rate?.perHour1h?.toFixed(0) || '0'} solutions
                         </p>
                       </div>
                     </div>
@@ -1589,15 +1579,17 @@ function MiningDashboardContent() {
                                 <p className="text-sm text-white font-mono truncate">
                                   {receipt.address.slice(0, 20)}...{receipt.address.slice(-8)}
                                 </p>
-                                <a
-                                  href={`https://sm.midnight.gd/api/statistics/${receipt.address}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-gray-400 hover:text-blue-400 transition-colors"
-                                  title="View on Midnight"
-                                >
-                                  <ExternalLink className="w-3.5 h-3.5" />
-                                </a>
+                                {getAddressStatsUrl(receipt.address) && (
+                                  <a
+                                    href={getAddressStatsUrl(receipt.address)!}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-gray-400 hover:text-blue-400 transition-colors"
+                                    title="View address stats"
+                                  >
+                                    <ExternalLink className="w-3.5 h-3.5" />
+                                  </a>
+                                )}
                               </div>
                             </div>
                             <div className="ml-3 text-right">
@@ -1649,9 +1641,9 @@ function MiningDashboardContent() {
                           </p>
                         </div>
                         <div className="text-center p-3 bg-gradient-to-br from-purple-900/20 to-purple-800/10 rounded-lg border border-purple-700/30">
-                          <p className="text-xs text-gray-400 mb-1">NIGHT</p>
+                          <p className="text-xs text-gray-400 mb-1">DFO</p>
                           <p className="text-xl font-bold text-purple-400">
-                            {rewardsData.global.grandTotal.night.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            {rewardsData.global.grandTotal.dfo.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </p>
                         </div>
                       </div>
@@ -1662,7 +1654,7 @@ function MiningDashboardContent() {
                         <div className="flex items-center px-2.5 pb-2 border-b border-gray-700/50">
                           <span className="text-sm font-medium text-gray-400 text-left flex-1">Day</span>
                           <span className="text-sm font-medium text-gray-400 text-center flex-1">Receipts</span>
-                          <span className="text-sm font-medium text-gray-400 text-right flex-1">NIGHT Rewards</span>
+                          <span className="text-sm font-medium text-gray-400 text-right flex-1">DFO Rewards</span>
                         </div>
                         {/* Table Rows */}
                         {rewardsData.global.days.slice(-5).reverse().map((day: any) => (
@@ -1673,7 +1665,7 @@ function MiningDashboardContent() {
                             <span className="text-sm font-semibold text-blue-400 text-left flex-1">Day {day.day}</span>
                             <span className="text-sm text-gray-300 text-center flex-1">{day.receipts.toLocaleString()}</span>
                             <span className="text-sm text-purple-400 font-semibold font-mono text-right flex-1">
-                              {day.night.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              {day.dfo.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
                           </div>
                         ))}
@@ -1687,10 +1679,41 @@ function MiningDashboardContent() {
         )}
 
 
-        {/* History Tab */}
-        {activeTab === 'history' && (
+        {/* Activity Tab - Contains History and Addresses sub-tabs */}
+        {activeTab === 'activity' && (
           <div className="space-y-6">
-            {historyLoading ? (
+            {/* Sub-tab Navigation */}
+            <div className="flex gap-2 bg-gray-800/50 rounded-lg p-1 w-fit">
+              <button
+                onClick={() => setActivitySubTab('history')}
+                className={cn(
+                  'px-4 py-2 rounded-md text-sm font-medium transition-colors',
+                  activitySubTab === 'history'
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                )}
+              >
+                <Calendar className="w-4 h-4 inline mr-2" />
+                History
+              </button>
+              <button
+                onClick={() => setActivitySubTab('addresses')}
+                className={cn(
+                  'px-4 py-2 rounded-md text-sm font-medium transition-colors',
+                  activitySubTab === 'addresses'
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                )}
+              >
+                <MapPin className="w-4 h-4 inline mr-2" />
+                Addresses
+              </button>
+            </div>
+
+            {/* History Sub-tab Content */}
+            {activitySubTab === 'history' && (
+              <>
+                {historyLoading ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="w-12 h-12 animate-spin text-blue-500" />
               </div>
@@ -1878,16 +1901,18 @@ function MiningDashboardContent() {
                                           <Copy className="w-3 h-3" />
                                         )}
                                       </button>
-                                      <a
-                                        href={`https://sm.midnight.gd/api/statistics/${addressHistory.address}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        onClick={(e) => e.stopPropagation()}
-                                        className="text-gray-400 hover:text-blue-400 transition-colors"
-                                        title="View on Midnight"
-                                      >
-                                        <ExternalLink className="w-3.5 h-3.5" />
-                                      </a>
+                                      {getAddressStatsUrl(addressHistory.address) && (
+                                        <a
+                                          href={getAddressStatsUrl(addressHistory.address)!}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="text-gray-400 hover:text-blue-400 transition-colors"
+                                          title="View address stats"
+                                        >
+                                          <ExternalLink className="w-3.5 h-3.5" />
+                                        </a>
+                                      )}
                                     </div>
                                     <div className="text-xs text-gray-500">
                                       Challenge: {addressHistory.challengeId.slice(0, 16)}...
@@ -2030,11 +2055,151 @@ function MiningDashboardContent() {
                 <p>No history data available</p>
               </div>
             )}
+              </>
+            )}
+
+            {/* Addresses Sub-tab Content */}
+            {activitySubTab === 'addresses' && (
+              <>
+                {addressesLoading ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Loader2 className="w-12 h-12 animate-spin text-blue-500" />
+                  </div>
+                ) : addressesData ? (
+                  <>
+                    {/* Summary Stats */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <StatCard
+                        label="Total Addresses"
+                        value={addressesData.summary?.totalAddresses || addressesData.addresses?.length || 0}
+                        icon={<MapPin className="w-8 h-8" />}
+                      />
+                      <StatCard
+                        label="Registered"
+                        value={addressesData.summary?.registeredAddresses || 0}
+                        icon={<CheckCircle2 className="w-8 h-8" />}
+                        variant="success"
+                      />
+                      <StatCard
+                        label="Solved Current"
+                        value={addressesData.summary?.solvedCurrentChallenge || 0}
+                        icon={<Target className="w-8 h-8" />}
+                        variant="primary"
+                      />
+                      <StatCard
+                        label="Not Yet Solved"
+                        value={(addressesData.summary?.registeredAddresses || 0) - (addressesData.summary?.solvedCurrentChallenge || 0)}
+                        icon={<Clock className="w-8 h-8" />}
+                      />
+                    </div>
+
+                    {/* Filter Buttons */}
+                    <div className="flex flex-wrap gap-2">
+                      {(['all', 'solved', 'unsolved', 'registered'] as const).map((filter) => (
+                        <button
+                          key={filter}
+                          onClick={() => setAddressFilter(filter)}
+                          className={cn(
+                            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+                            addressFilter === filter
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'
+                          )}
+                        >
+                          {filter.charAt(0).toUpperCase() + filter.slice(1)}
+                          <span className="ml-2 text-xs opacity-70">
+                            ({filter === 'all'
+                              ? addressesData.addresses?.length || 0
+                              : filter === 'solved'
+                              ? addressesData.addresses?.filter((a: any) => a.solvedCurrentChallenge).length || 0
+                              : filter === 'unsolved'
+                              ? addressesData.addresses?.filter((a: any) => !a.solvedCurrentChallenge && a.registered).length || 0
+                              : addressesData.addresses?.filter((a: any) => a.registered).length || 0
+                            })
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Address List */}
+                    <Card variant="bordered">
+                      <CardHeader>
+                        <CardTitle>Mining Addresses</CardTitle>
+                        <CardDescription>
+                          {addressesData.currentChallenge
+                            ? `Current Challenge: ${addressesData.currentChallenge}`
+                            : 'No active challenge'}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-2 max-h-[500px] overflow-y-auto">
+                          {addressesData.addresses
+                            ?.filter((addr: any) => {
+                              if (addressFilter === 'all') return true;
+                              if (addressFilter === 'solved') return addr.solvedCurrentChallenge;
+                              if (addressFilter === 'unsolved') return !addr.solvedCurrentChallenge && addr.registered;
+                              if (addressFilter === 'registered') return addr.registered;
+                              return true;
+                            })
+                            .map((addr: any) => (
+                              <div
+                                key={addr.index}
+                                className={cn(
+                                  'flex items-center justify-between p-3 rounded-lg',
+                                  addr.solvedCurrentChallenge
+                                    ? 'bg-green-900/20 border border-green-700/30'
+                                    : addr.registered
+                                    ? 'bg-gray-800/50 border border-gray-700/30'
+                                    : 'bg-gray-900/30 border border-gray-800/30'
+                                )}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <span className="text-xs text-gray-500 w-8">#{addr.index}</span>
+                                  <code className="text-sm text-gray-300 font-mono">
+                                    {addr.bech32?.slice(0, 20)}...{addr.bech32?.slice(-8)}
+                                  </code>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {addr.totalSolutions > 0 && (
+                                    <span className="text-xs text-gray-400">
+                                      {addr.totalSolutions} solutions
+                                    </span>
+                                  )}
+                                  {addr.solvedCurrentChallenge ? (
+                                    <span className="flex items-center gap-1 text-xs text-green-400">
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      Solved
+                                    </span>
+                                  ) : addr.registered ? (
+                                    <span className="flex items-center gap-1 text-xs text-blue-400">
+                                      <Clock className="w-3 h-3" />
+                                      Mining
+                                    </span>
+                                  ) : (
+                                    <span className="flex items-center gap-1 text-xs text-gray-500">
+                                      Not Registered
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </>
+                ) : (
+                  <div className="text-center py-12 text-gray-500">
+                    <p>No address data available</p>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
 
-        {/* Rewards Tab */}
-        {activeTab === 'rewards' && (
+        {/* Rewards Tab - REMOVED, data shown on dashboard */}
+        {/* Old rewards tab content removed - rewards data is now only on dashboard */}
+        {false && (
           <div className="space-y-6">
             {rewardsLoading ? (
               <div className="flex items-center justify-center py-12">
@@ -2113,8 +2278,7 @@ function MiningDashboardContent() {
                               <th className="py-4 px-4">Time Period</th>
                               <th className="py-4 px-4">Receipts</th>
                               <th className="py-4 px-4">Addresses</th>
-                              <th className="py-4 px-4">STAR</th>
-                              <th className="py-4 px-4">NIGHT</th>
+                              <th className="py-4 px-4">DFO</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-gray-800">
@@ -2145,10 +2309,7 @@ function MiningDashboardContent() {
                                     <td className="py-4 px-4 font-semibold">{hourData.receipts.toLocaleString()}</td>
                                     <td className="py-4 px-4">{hourData.addresses}</td>
                                     <td className="py-4 px-4">
-                                      <span className="text-blue-400 font-semibold">{hourData.star.toLocaleString()}</span>
-                                    </td>
-                                    <td className="py-4 px-4">
-                                      <span className="text-purple-400 font-semibold font-mono">{hourData.night.toFixed(6)}</span>
+                                      <span className="text-blue-400 font-semibold">{hourData.dfo.toLocaleString()}</span>
                                     </td>
                                   </tr>
                                 );
@@ -2183,34 +2344,17 @@ function MiningDashboardContent() {
                         </CardContent>
                       </Card>
 
-                      {/* Total STAR Card */}
-                      <Card variant="bordered" className="bg-gradient-to-br from-blue-900/20 to-blue-800/10 border-blue-700/50">
+                      {/* Total DFO Card */}
+                      <Card variant="bordered" className="bg-gradient-to-br from-blue-900/20 to-purple-800/10 border-blue-700/50">
                         <CardContent className="p-6">
                           <div className="flex items-center gap-3 mb-2">
                             <div className="p-3 bg-blue-500/20 rounded-lg">
                               <Award className="w-6 h-6 text-blue-400" />
                             </div>
                             <div>
-                              <p className="text-sm text-gray-400 font-medium">Total STAR</p>
+                              <p className="text-sm text-gray-400 font-medium">Total DFO</p>
                               <p className="text-4xl font-bold text-blue-400 mt-1">
-                                {rewardsData.global.grandTotal.star.toLocaleString()}
-                              </p>
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-
-                      {/* Total NIGHT Card */}
-                      <Card variant="bordered" className="bg-gradient-to-br from-purple-900/20 to-purple-800/10 border-purple-700/50">
-                        <CardContent className="p-6">
-                          <div className="flex items-center gap-3 mb-2">
-                            <div className="p-3 bg-purple-500/20 rounded-lg">
-                              <Zap className="w-6 h-6 text-purple-400" />
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-400 font-medium">Total NIGHT</p>
-                              <p className="text-4xl font-bold text-purple-400 mt-1">
-                                {rewardsData.global.grandTotal.night.toFixed(6)}
+                                {rewardsData.global.grandTotal.dfo.toLocaleString()}
                               </p>
                             </div>
                           </div>
@@ -2226,7 +2370,7 @@ function MiningDashboardContent() {
                           <CardTitle className="text-xl">Daily Breakdown</CardTitle>
                         </div>
                         <CardDescription>
-                          STAR and NIGHT rewards by day
+                          DFO rewards by day
                         </CardDescription>
                       </CardHeader>
                       <CardContent>
@@ -2238,14 +2382,13 @@ function MiningDashboardContent() {
                                 <th className="py-4 px-4">Date</th>
                                 <th className="py-4 px-4">Receipts</th>
                                 <th className="py-4 px-4">Addresses</th>
-                                <th className="py-4 px-4">STAR</th>
-                                <th className="py-4 px-4">NIGHT</th>
+                                <th className="py-4 px-4">DFO</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-800">
                               {rewardsData.global.days.length === 0 ? (
                                 <tr>
-                                  <td colSpan={6} className="py-12 text-center text-gray-500">
+                                  <td colSpan={5} className="py-12 text-center text-gray-500">
                                     <Calendar className="w-12 h-12 mx-auto mb-3 opacity-50" />
                                     <p>No daily data available yet</p>
                                   </td>
@@ -2260,10 +2403,7 @@ function MiningDashboardContent() {
                                     <td className="py-4 px-4 font-semibold">{day.receipts.toLocaleString()}</td>
                                     <td className="py-4 px-4">{day.addresses || 0}</td>
                                     <td className="py-4 px-4">
-                                      <span className="text-blue-400 font-semibold">{day.star.toLocaleString()}</span>
-                                    </td>
-                                    <td className="py-4 px-4">
-                                      <span className="text-purple-400 font-semibold font-mono">{day.night.toFixed(6)}</span>
+                                      <span className="text-blue-400 font-semibold">{day.dfo.toLocaleString()}</span>
                                     </td>
                                   </tr>
                                 ))
@@ -2321,18 +2461,123 @@ function MiningDashboardContent() {
                   />
                 </div>
 
-                {/* Workers Race View */}
+                {/* Workers View */}
                 <Card variant="bordered">
                   <CardHeader>
-                    <CardTitle className="text-xl flex items-center gap-2">
-                      <Users className="w-5 h-5 text-blue-400" />
-                      Worker Performance Race
-                    </CardTitle>
-                    <CardDescription>
-                      Real-time worker performance tracking - fastest workers at the top
-                    </CardDescription>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="text-xl flex items-center gap-2">
+                          <Users className="w-5 h-5 text-blue-400" />
+                          Worker Performance
+                        </CardTitle>
+                        <CardDescription>
+                          Real-time worker performance tracking
+                        </CardDescription>
+                      </div>
+                      {/* View Toggle */}
+                      <div className="flex items-center gap-1 p-1 bg-gray-800 rounded-lg">
+                        <button
+                          onClick={() => setWorkersView('list')}
+                          className={cn(
+                            'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                            workersView === 'list'
+                              ? 'bg-blue-600 text-white'
+                              : 'text-gray-400 hover:text-white'
+                          )}
+                        >
+                          List
+                        </button>
+                        <button
+                          onClick={() => setWorkersView('cards')}
+                          className={cn(
+                            'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                            workersView === 'cards'
+                              ? 'bg-blue-600 text-white'
+                              : 'text-gray-400 hover:text-white'
+                          )}
+                        >
+                          Cards
+                        </button>
+                      </div>
+                    </div>
                   </CardHeader>
                   <CardContent>
+                    {/* Card View */}
+                    {workersView === 'cards' && (
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
+                        {Array.from(workers.values())
+                          .sort((a, b) => a.workerId - b.workerId)
+                          .map((worker) => {
+                            const uptime = Date.now() - worker.startTime;
+                            const uptimeSeconds = Math.floor(uptime / 1000);
+                            const uptimeMin = Math.floor(uptimeSeconds / 60);
+
+                            return (
+                              <div
+                                key={worker.workerId}
+                                className={cn(
+                                  'p-3 rounded-lg border transition-all',
+                                  worker.status === 'mining' && 'bg-blue-900/20 border-blue-700/50',
+                                  worker.status === 'submitting' && 'bg-yellow-900/20 border-yellow-700/50 animate-pulse',
+                                  worker.status === 'completed' && 'bg-green-900/20 border-green-700/50',
+                                  worker.status === 'idle' && 'bg-gray-900/20 border-gray-700/50',
+                                  worker.solutionsFound > 0 && 'ring-2 ring-green-500/30'
+                                )}
+                              >
+                                {/* Header */}
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className="font-bold text-white">W{worker.workerId}</span>
+                                  <span className={cn(
+                                    'px-1.5 py-0.5 rounded text-[10px] font-medium',
+                                    worker.status === 'mining' && 'bg-blue-500/20 text-blue-400',
+                                    worker.status === 'submitting' && 'bg-yellow-500/20 text-yellow-400',
+                                    worker.status === 'completed' && 'bg-green-500/20 text-green-400',
+                                    worker.status === 'idle' && 'bg-gray-500/20 text-gray-400'
+                                  )}>
+                                    {worker.status === 'mining' && 'Mining'}
+                                    {worker.status === 'submitting' && 'Submit'}
+                                    {worker.status === 'completed' && 'Done'}
+                                    {worker.status === 'idle' && 'Idle'}
+                                  </span>
+                                </div>
+
+                                {/* Address */}
+                                <div className="text-[10px] text-gray-400 mb-2">
+                                  Addr #{worker.addressIndex}
+                                </div>
+
+                                {/* Stats */}
+                                <div className="space-y-1 text-xs">
+                                  <div className="flex justify-between">
+                                    <span className="text-gray-500">Rate:</span>
+                                    <span className="text-white font-mono">{worker.hashRate.toLocaleString()}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="text-gray-500">Hashes:</span>
+                                    <span className="text-gray-300 font-mono">{(worker.hashesComputed / 1000).toFixed(1)}k</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="text-gray-500">Time:</span>
+                                    <span className="text-gray-300">{uptimeMin}m</span>
+                                  </div>
+                                </div>
+
+                                {/* Solution Badge */}
+                                {worker.solutionsFound > 0 && (
+                                  <div className="mt-2 text-center">
+                                    <span className="px-2 py-1 rounded text-[10px] font-bold bg-green-500/20 text-green-400">
+                                      {worker.solutionsFound} Solution{worker.solutionsFound > 1 ? 's' : ''}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                      </div>
+                    )}
+
+                    {/* List View */}
+                    {workersView === 'list' && (
                     <div className="space-y-3">
                       {Array.from(workers.values())
                         .sort((a, b) => {
@@ -2452,6 +2697,7 @@ function MiningDashboardContent() {
                           );
                         })}
                     </div>
+                    )}
                   </CardContent>
                 </Card>
               </>
@@ -2459,8 +2705,8 @@ function MiningDashboardContent() {
           </div>
         )}
 
-        {/* Addresses Tab */}
-        {activeTab === 'addresses' && (
+        {/* Addresses Tab - REMOVED, now part of Activity tab */}
+        {false && (
           <div className="space-y-6">
             {addressesLoading ? (
               <div className="flex items-center justify-center py-12">
@@ -2654,15 +2900,17 @@ function MiningDashboardContent() {
                                         <Copy className="w-3 h-3" />
                                       )}
                                     </button>
-                                    <a
-                                      href={`https://sm.midnight.gd/api/statistics/${address.bech32}`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-gray-400 hover:text-blue-400 transition-colors flex-shrink-0"
-                                      title="View on Midnight"
-                                    >
-                                      <ExternalLink className="w-3.5 h-3.5" />
-                                    </a>
+                                    {getAddressStatsUrl(address.bech32) && (
+                                      <a
+                                        href={getAddressStatsUrl(address.bech32)!}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-gray-400 hover:text-blue-400 transition-colors flex-shrink-0"
+                                        title="View address stats"
+                                      >
+                                        <ExternalLink className="w-3.5 h-3.5" />
+                                      </a>
+                                    )}
                                   </div>
                                   <div className="flex items-center gap-2 text-xs">
                                     <span className="text-gray-500">
@@ -2718,10 +2966,41 @@ function MiningDashboardContent() {
           </div>
         )}
 
-        {/* Scale Tab */}
-        {activeTab === 'scale' && (
+        {/* Settings Tab - Contains Performance and Diagnostics sub-tabs */}
+        {activeTab === 'settings' && (
           <div className="space-y-6">
-            {scaleLoading ? (
+            {/* Sub-tab Navigation */}
+            <div className="flex gap-2 bg-gray-800/50 rounded-lg p-1 w-fit">
+              <button
+                onClick={() => setSettingsSubTab('performance')}
+                className={cn(
+                  'px-4 py-2 rounded-md text-sm font-medium transition-colors',
+                  settingsSubTab === 'performance'
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                )}
+              >
+                <Gauge className="w-4 h-4 inline mr-2" />
+                Performance
+              </button>
+              <button
+                onClick={() => setSettingsSubTab('diagnostics')}
+                className={cn(
+                  'px-4 py-2 rounded-md text-sm font-medium transition-colors',
+                  settingsSubTab === 'diagnostics'
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                )}
+              >
+                <Activity className="w-4 h-4 inline mr-2" />
+                Diagnostics
+              </button>
+            </div>
+
+            {/* Performance Sub-tab Content */}
+            {settingsSubTab === 'performance' && (
+              <>
+                {scaleLoading ? (
               <div className="flex items-center justify-center py-12">
                 <div className="text-center space-y-4">
                   <RefreshCw className="w-12 h-12 animate-spin text-blue-500 mx-auto" />
@@ -3202,6 +3481,380 @@ function MiningDashboardContent() {
                     </ul>
                   </CardContent>
                 </Card>
+
+                {/* Dev Fee Section */}
+                <Card variant="bordered">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Award className="w-5 h-5 text-blue-400" />
+                      Development Fee
+                    </CardTitle>
+                    <CardDescription>Support continued maintenance and improvements</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <p className="text-gray-300 text-sm leading-relaxed">
+                      The development fee is a small percentage of mining rewards that supports ongoing maintenance and improvements.
+                      When enabled, <span className="text-blue-400 font-semibold">1 out of every 15 solutions</span> (~6.67%) will be submitted to a development address.
+                    </p>
+
+                    {/* Enable/Disable Toggle */}
+                    <div className="p-4 rounded-lg bg-gray-800/50 border border-gray-700">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <h4 className="font-semibold text-white">Enable Development Fee</h4>
+                          <p className="text-gray-400 text-sm mt-1">
+                            Support the development of this application
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            const newValue = !devFeeEnabled;
+                            toggleDevFee(newValue);
+                          }}
+                          disabled={devFeeLoading}
+                          className={cn(
+                            'relative w-14 h-7 rounded-full transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-blue-500',
+                            devFeeEnabled ? 'bg-blue-500' : 'bg-gray-600',
+                            devFeeLoading && 'opacity-50 cursor-not-allowed'
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              'absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-white transition-transform duration-300',
+                              devFeeEnabled ? 'translate-x-7' : 'translate-x-0'
+                            )}
+                          />
+                        </button>
+                      </div>
+
+                      <div className={cn(
+                        'mt-3 p-3 rounded-lg border transition-all',
+                        devFeeEnabled
+                          ? 'bg-green-900/20 border-green-500/50'
+                          : 'bg-gray-700/50 border-gray-600'
+                      )}>
+                        <div className="flex items-center gap-2">
+                          {devFeeEnabled ? (
+                            <>
+                              <CheckCircle2 className="w-5 h-5 text-green-400" />
+                              <span className="text-green-400 text-sm">Enabled - Thank you for supporting development!</span>
+                            </>
+                          ) : (
+                            <>
+                              <XCircle className="w-5 h-5 text-gray-400" />
+                              <span className="text-gray-400 text-sm">Disabled - All solutions go to your wallet</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Stats */}
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="p-3 rounded-lg bg-gray-800/50 border border-gray-700 text-center">
+                        <div className="text-xl font-bold text-blue-400">1:17</div>
+                        <div className="text-xs text-gray-400">Ratio</div>
+                      </div>
+                      <div className="p-3 rounded-lg bg-gray-800/50 border border-gray-700 text-center">
+                        <div className="text-xl font-bold text-purple-400">5.88%</div>
+                        <div className="text-xs text-gray-400">Dev Fee</div>
+                      </div>
+                      <div className="p-3 rounded-lg bg-gray-800/50 border border-gray-700 text-center">
+                        <div className="text-xl font-bold text-green-400">94.12%</div>
+                        <div className="text-xs text-gray-400">Your Rewards</div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </>
+            )}
+              </>
+            )}
+
+            {/* Diagnostics Sub-tab Content */}
+            {settingsSubTab === 'diagnostics' && (
+              <>
+                {/* Diagnostics Test Section */}
+                <Card variant="bordered">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Activity className="w-5 h-5" />
+                      System Diagnostics
+                    </CardTitle>
+                    <CardDescription>
+                      Test API connectivity and system health
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    {/* Password Input for Full Test */}
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">
+                          Wallet Password (optional - for signature test)
+                        </label>
+                        <input
+                          type="password"
+                          value={diagnosticsPassword}
+                          onChange={(e) => setDiagnosticsPassword(e.target.value)}
+                          placeholder="Enter wallet password for full endpoint testing"
+                          className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                          Leave blank to skip registration endpoint test
+                        </p>
+                      </div>
+
+                      <Button
+                        onClick={async () => {
+                          setDiagnosticsRunning(true);
+                          try {
+                            const response = await fetch('/api/diagnostics/test-endpoints', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ password: diagnosticsPassword || undefined }),
+                            });
+                            const data = await response.json();
+                            setDiagnosticsResults(data);
+                          } catch (error: any) {
+                            setDiagnosticsResults({ error: error.message });
+                          } finally {
+                            setDiagnosticsRunning(false);
+                          }
+                        }}
+                        disabled={diagnosticsRunning}
+                        variant="primary"
+                        className="w-full"
+                      >
+                        {diagnosticsRunning ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Running Diagnostics...
+                          </>
+                        ) : (
+                          <>
+                            <Activity className="w-4 h-4" />
+                            Run Diagnostics
+                          </>
+                        )}
+                      </Button>
+                    </div>
+
+                    {/* Results Display */}
+                    {diagnosticsResults && (
+                      <div className="space-y-4">
+                        {diagnosticsResults.error ? (
+                          <Alert variant="error">
+                            <AlertCircle className="w-5 h-5" />
+                            <span>{diagnosticsResults.error}</span>
+                          </Alert>
+                        ) : (
+                          <>
+                            {/* Summary Cards */}
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                              <StatCard
+                                label="Total Tests"
+                                value={diagnosticsResults.results?.length || 0}
+                                icon={<ListChecks className="w-8 h-8" />}
+                              />
+                              <StatCard
+                                label="Passed"
+                                value={diagnosticsResults.results?.filter((r: any) => r.success).length || 0}
+                                icon={<CheckCircle2 className="w-8 h-8" />}
+                                variant="success"
+                              />
+                              <StatCard
+                                label="Failed"
+                                value={diagnosticsResults.results?.filter((r: any) => !r.success).length || 0}
+                                icon={<XCircle className="w-8 h-8" />}
+                                variant={diagnosticsResults.results?.filter((r: any) => !r.success).length > 0 ? 'danger' : 'default'}
+                              />
+                              <StatCard
+                                label="Health"
+                                value={`${Math.round((diagnosticsResults.results?.filter((r: any) => r.success).length / diagnosticsResults.results?.length) * 100 || 0)}%`}
+                                icon={<Activity className="w-8 h-8" />}
+                                variant="primary"
+                              />
+                            </div>
+
+                            {/* Detailed Results */}
+                            <div className="space-y-2">
+                              {diagnosticsResults.results?.map((result: any, index: number) => (
+                                <div
+                                  key={index}
+                                  className={cn(
+                                    'p-4 rounded-lg border',
+                                    result.success
+                                      ? 'bg-green-900/20 border-green-700/30'
+                                      : 'bg-red-900/20 border-red-700/30'
+                                  )}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                      {result.success ? (
+                                        <CheckCircle2 className="w-5 h-5 text-green-400" />
+                                      ) : (
+                                        <XCircle className="w-5 h-5 text-red-400" />
+                                      )}
+                                      <div>
+                                        <p className="font-medium text-gray-200">{result.name}</p>
+                                        <p className="text-sm text-gray-400">{result.endpoint}</p>
+                                      </div>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-sm text-gray-400">
+                                        {result.responseTime ? `${result.responseTime}ms` : '-'}
+                                      </p>
+                                      {result.error && (
+                                        <p className="text-xs text-red-400">{result.error}</p>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* App Version */}
+                <Card variant="bordered">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="flex items-center gap-2">
+                        <Info className="w-5 h-5 text-blue-400" />
+                        Application Info
+                      </CardTitle>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={fetchVersionInfo}
+                        disabled={versionLoading}
+                        className="text-gray-400 hover:text-white"
+                      >
+                        {versionLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-4 h-4" />
+                        )}
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {/* Version Grid */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <div className="p-3 bg-gray-800/50 rounded-lg border border-gray-700">
+                        <div className="text-xs text-gray-400 mb-1">Version</div>
+                        <div className="text-lg font-mono text-white">{versionInfo?.currentVersion || '1.0.0'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-800/50 rounded-lg border border-gray-700">
+                        <div className="text-xs text-gray-400 mb-1">Current Commit</div>
+                        <div className="text-lg font-mono text-white">{versionInfo?.currentCommit || 'N/A'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-800/50 rounded-lg border border-gray-700">
+                        <div className="text-xs text-gray-400 mb-1">Latest Commit</div>
+                        <div className="text-lg font-mono text-white">{versionInfo?.latestCommit || 'N/A'}</div>
+                      </div>
+                      <div className="p-3 bg-gray-800/50 rounded-lg border border-gray-700">
+                        <div className="text-xs text-gray-400 mb-1">Status</div>
+                        <div className="text-lg font-mono text-white">{stats?.active ? 'Mining' : 'Idle'}</div>
+                      </div>
+                    </div>
+
+                    {/* Update Available Alert */}
+                    {versionInfo?.updateAvailable && (
+                      <Alert variant="warning" className="bg-yellow-900/20 border-yellow-700/50">
+                        <AlertCircle className="w-5 h-5 text-yellow-400" />
+                        <div className="flex-1">
+                          <span className="font-semibold text-yellow-400">Update Available!</span>
+                          <p className="text-sm text-gray-300 mt-1">
+                            A newer version is available ({versionInfo.latestCommit}).
+                            {versionInfo.latestCommitMessage && (
+                              <span className="block text-xs text-gray-400 mt-1">
+                                Latest: {versionInfo.latestCommitMessage}
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                        <a
+                          href={versionInfo.repoUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-1.5 bg-yellow-600 hover:bg-yellow-500 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-1"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          Update
+                        </a>
+                      </Alert>
+                    )}
+
+                    {/* Up to Date */}
+                    {versionInfo && !versionInfo.updateAvailable && !versionInfo.checkError && versionInfo.latestCommit && (
+                      <Alert variant="success" className="bg-green-900/20 border-green-700/50">
+                        <CheckCircle2 className="w-5 h-5 text-green-400" />
+                        <span className="text-green-400">You are running the latest version.</span>
+                      </Alert>
+                    )}
+
+                    {/* Error checking */}
+                    {versionInfo?.checkError && (
+                      <Alert variant="info" className="bg-gray-800/50 border-gray-700">
+                        <Info className="w-5 h-5 text-gray-400" />
+                        <span className="text-gray-400 text-sm">{versionInfo.checkError}</span>
+                      </Alert>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Console Logs */}
+                <Card variant="bordered">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="flex items-center gap-2">
+                        <Terminal className="w-5 h-5 text-green-400" />
+                        Console Logs
+                      </CardTitle>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setLogs([])}
+                        className="text-gray-400 hover:text-white"
+                      >
+                        Clear Logs
+                      </Button>
+                    </div>
+                    <CardDescription>Real-time mining activity logs</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="bg-gray-900 rounded-lg border border-gray-700 p-4 h-64 overflow-y-auto font-mono text-xs">
+                      {logs.length === 0 ? (
+                        <p className="text-gray-500">No logs yet. Start mining to see activity.</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {logs.slice(-100).map((log, index) => (
+                            <div
+                              key={index}
+                              className={cn(
+                                'flex gap-2',
+                                log.type === 'success' && 'text-green-400',
+                                log.type === 'error' && 'text-red-400',
+                                log.type === 'warning' && 'text-yellow-400',
+                                log.type === 'info' && 'text-gray-300'
+                              )}
+                            >
+                              <span className="text-gray-500 flex-shrink-0">
+                                {new Date(log.timestamp).toLocaleTimeString()}
+                              </span>
+                              <span className="break-all">{log.message}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
               </>
             )}
           </div>
@@ -3210,102 +3863,31 @@ function MiningDashboardContent() {
         {/* Consolidate Tab */}
         {activeTab === 'consolidate' && (
           <div className="space-y-6">
-            {/* Warning Banner */}
-            <Alert variant="info" className="bg-gradient-to-r from-blue-900/40 to-indigo-900/40 border-2 border-blue-600/60">
-              <div className="flex items-start gap-4">
-                <Info className="w-8 h-8 text-blue-400 flex-shrink-0 mt-1" />
-                <div className="space-y-2 flex-1">
-                  <div>
-                    <h3 className="text-lg font-bold text-blue-400 mb-2">ℹ️ Consolidation Feature Available</h3>
-                    <div className="space-y-2 text-sm text-gray-200 leading-relaxed">
-                      <p>
-                        <strong>This consolidation feature has been fully implemented to the Midnight API specification.</strong> All transactions
-                        are properly signed and confirmed by the Midnight network.
-                      </p>
-                      <p>
-                        All consolidations are automatically logged and can be reviewed in your consolidation history. Use the "Download History"
-                        button to export your records at any time.
-                      </p>
-                      <p className="text-blue-300 font-semibold">
-                        Please note: Always verify the destination address before proceeding with consolidation.
-                      </p>
-                    </div>
-                  </div>
-                </div>
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                  <Wallet className="w-6 h-6 text-blue-400" />
+                  Consolidate Rewards
+                </h2>
+                <p className="text-gray-400 text-sm mt-1">
+                  Combine rewards from all registered addresses into a single destination
+                </p>
+              </div>
+            </div>
+
+            {/* Important Warning */}
+            <Alert variant="warning">
+              <AlertCircle className="w-4 h-4" />
+              <div>
+                <p className="font-semibold mb-1">Important</p>
+                <ul className="text-sm space-y-1 list-disc list-inside">
+                  <li>All past and future solutions from source addresses will be assigned to the destination</li>
+                  <li>You should consolidate before claiming your tokens</li>
+                  <li>Always verify the destination address before proceeding</li>
+                </ul>
               </div>
             </Alert>
-
-            {/* Info Card */}
-            <Card variant="bordered" className="bg-gradient-to-br from-blue-900/20 to-purple-900/20 border-blue-700/50">
-              <CardHeader>
-                <div className="flex items-start gap-3">
-                  <div className="p-2 bg-blue-500/20 rounded-lg">
-                    <Info className="w-5 h-5 text-blue-400" />
-                  </div>
-                  <div className="flex-1">
-                    <CardTitle className="text-lg">What is Reward Consolidation?</CardTitle>
-                    <CardDescription>Learn how to consolidate your rewards from multiple addresses</CardDescription>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700">
-                    <h3 className="font-semibold text-white mb-2 flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-green-400" />
-                      How It Works
-                    </h3>
-                    <p className="text-sm text-gray-300 leading-relaxed">
-                      When mining, you use multiple addresses to find solutions. Consolidation allows you to combine all rewards
-                      from these addresses into a single destination address, making it easier to redeem your NIGHT tokens later.
-                    </p>
-                  </div>
-
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700">
-                      <h3 className="font-semibold text-white mb-2 flex items-center gap-2">
-                        <Wallet className="w-4 h-4 text-blue-400" />
-                        Wallet Address (Index)
-                      </h3>
-                      <p className="text-sm text-gray-300 leading-relaxed">
-                        Select an address from your current wallet by index number (0-199). For example, index 0 is your first
-                        mining address. This is the default and most common option.
-                      </p>
-                    </div>
-
-                    <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700">
-                      <h3 className="font-semibold text-white mb-2 flex items-center gap-2">
-                        <MapPin className="w-4 h-4 text-purple-400" />
-                        External Address
-                      </h3>
-                      <p className="text-sm text-gray-300 leading-relaxed">
-                        Enter any Cardano address (addr1...). Use this if you're running multiple miners and want to consolidate
-                        everything to a single address from another wallet.
-                      </p>
-                    </div>
-                  </div>
-
-                  <Alert variant="warning">
-                    <AlertCircle className="w-4 h-4" />
-                    <div>
-                      <p className="font-semibold mb-1">Important Notes</p>
-                      <ul className="text-sm space-y-1 list-disc list-inside">
-                        <li>All past and future solutions from source addresses will be assigned to the destination</li>
-                        <li>You should consolidate before claiming your NIGHT tokens</li>
-                        <li>Your password is used to sign transactions securely in your browser</li>
-                      </ul>
-                    </div>
-                  </Alert>
-
-                  <div className="p-4 bg-gradient-to-r from-green-900/30 to-emerald-900/30 rounded-lg border border-green-700/50">
-                    <p className="text-sm text-gray-300">
-                      <strong className="text-green-400">💡 Tip:</strong> Most users should use <strong>index 0</strong> as their
-                      destination address. Only use an external address if you're consolidating from multiple miners or wallets.
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
 
             {/* Configuration Card */}
             <Card variant="bordered">
@@ -3389,15 +3971,19 @@ function MiningDashboardContent() {
                           placeholder="addr1..."
                         />
                         <p className="text-xs text-gray-500 mt-1">
-                          Enter any Cardano address (can be from another wallet)
+                          Enter any Cardano mainnet address (can be from another wallet)
                         </p>
+                        <div className="mt-2 p-3 bg-yellow-900/20 border border-yellow-700/50 rounded-lg">
+                          <p className="text-xs text-yellow-300">
+                            <strong>Important:</strong> Make sure the external address is already registered with the mining project.
+                            Only registered addresses can receive consolidated rewards.
+                          </p>
+                        </div>
                       </>
                     )}
                   </div>
 
                   <div className="flex gap-3">
-
-
                     <Button
                       onClick={async () => {
                         // Validate destination address for custom mode
@@ -3411,7 +3997,8 @@ function MiningDashboardContent() {
                             });
                             return;
                           }
-                          if (!customDestinationAddress.startsWith('addr1')) {
+                          // Validate address format (must start with addr1 and be > 50 chars)
+                          if (!customDestinationAddress.startsWith('addr1') || customDestinationAddress.length < 50) {
                             setConsolidateModal({
                               open: true,
                               type: 'error',
@@ -3422,13 +4009,8 @@ function MiningDashboardContent() {
                           }
                         }
 
-                        // Show mode selection modal first
-                        setConsolidateModal({
-                          open: true,
-                          type: 'mode-select',
-                          title: 'Choose Consolidation Mode',
-                          message: 'Select which addresses to consolidate:',
-                        });
+                        // Go directly to password prompt with all-registered mode
+                        startConsolidationFlow('all-registered', false);
                       }}
                       disabled={consolidateLoading}
                       className="flex-1"
@@ -3436,12 +4018,12 @@ function MiningDashboardContent() {
                       {consolidateLoading ? (
                         <>
                           <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                          Running...
+                          Consolidating...
                         </>
                       ) : (
                         <>
                           <Play className="w-4 h-4 mr-2" />
-                          Start Continuous Consolidation
+                          Start Consolidation
                         </>
                       )}
                     </Button>
@@ -3630,245 +4212,119 @@ function MiningDashboardContent() {
               </CardContent>
             </Card>
 
-            {/* Individual Address Consolidation */}
-            <Card variant="bordered">
-              <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <MapPin className="w-5 h-5 text-purple-400" />
-                  Individual Address Consolidation
-                </CardTitle>
-                <CardDescription>Manually consolidate specific addresses for testing</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {addressesData && addressesData.addresses ? (
-                  <div className="space-y-4">
-                    {/* Destination Selection */}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">
-                        Destination Address Index
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        max={addressesData.addresses.length - 1}
-                        value={destinationAddressIndex}
-                        onChange={(e) => setDestinationAddressIndex(parseInt(e.target.value) || 0)}
-                        className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="0"
-                      />
-                      <p className="text-xs text-gray-500 mt-1">
-                        All selected addresses will consolidate to this address
-                      </p>
-                    </div>
-
-                    {/* Address List with Action Buttons */}
-                    <div className="max-h-[400px] overflow-y-auto space-y-2">
-                      {addressesData.addresses.map((address: any) => (
-                        <div
-                          key={address.index}
-                          className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700/50"
-                        >
-                          <div className="flex items-center gap-3 flex-1 min-w-0">
-                            <div className="flex-shrink-0 w-10 h-10 rounded bg-gray-700 flex items-center justify-center">
-                              <span className="text-sm font-bold text-gray-300">#{address.index}</span>
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm text-white font-mono truncate">
-                                  {address.bech32.slice(0, 20)}...{address.bech32.slice(-8)}
+            {/* Consolidation History */}
+            {consolidationHistory.length > 0 && (
+              <Card variant="bordered">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <Clock className="w-5 h-5 text-purple-400" />
+                      Consolidation History
+                    </CardTitle>
+                    <Button
+                      onClick={async () => {
+                        // Download full consolidation history
+                        try {
+                          const response = await fetch('/api/consolidate/history');
+                          const data = await response.json();
+                          if (data.success && data.history) {
+                            const json = JSON.stringify(data.history, null, 2);
+                            const blob = new Blob([json], { type: 'application/json' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `consolidation-history-full-${Date.now()}.json`;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                          }
+                        } catch (err) {
+                          console.error('Failed to download history:', err);
+                        }
+                      }}
+                      size="sm"
+                      variant="outline"
+                    >
+                      Download History
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="max-h-96 overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-gray-900 z-10">
+                        <tr className="text-left text-gray-400 border-b border-gray-700">
+                          <th className="py-3 px-3 font-medium">Date</th>
+                          <th className="py-3 px-3 font-medium">From</th>
+                          <th className="py-3 px-3 font-medium">To</th>
+                          <th className="py-3 px-3 font-medium text-right">Solutions</th>
+                          <th className="py-3 px-3 font-medium text-center">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {consolidationHistory.slice(0, 50).map((record: any, i: number) => (
+                          <tr key={i} className={`border-b border-gray-800 hover:bg-gray-800/30 transition-colors ${
+                            i % 2 === 0 ? 'bg-gray-800/20' : ''
+                          }`}>
+                            <td className="py-3 px-3 text-white text-xs">
+                              {new Date(record.ts).toLocaleDateString()}
+                            </td>
+                            <td className="py-3 px-3 font-mono text-xs">
+                              {record.sourceAddress ? (
+                                <span className="text-gray-300" title={record.sourceAddress}>
+                                  {record.sourceAddress.slice(0, 8)}...{record.sourceAddress.slice(-6)}
                                 </span>
-                                <a
-                                  href={`https://sm.midnight.gd/api/statistics/${address.bech32}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-gray-400 hover:text-blue-400 transition-colors flex-shrink-0"
-                                  title="View on Midnight"
-                                >
-                                  <ExternalLink className="w-3 h-3" />
-                                </a>
-                              </div>
-                              <p className="text-xs text-gray-500">
-                                Solutions: {address.totalSolutions || 0}
-                              </p>
-                              {(() => {
-                                const addressHistory = consolidationHistory.filter(
-                                  (r: any) => r.sourceAddress === address.bech32 && r.status === 'success'
-                                );
-                                if (addressHistory.length > 0) {
-                                  const lastConsolidation = addressHistory[addressHistory.length - 1];
-                                  return (
-                                    <div className="mt-1">
-                                      <p className="text-xs text-green-400 font-mono">
-                                        ✓ Consolidated → {lastConsolidation.destinationAddress.slice(0, 12)}...{lastConsolidation.destinationAddress.slice(-8)}
-                                      </p>
-                                    </div>
-                                  );
-                                }
-                              })()}
-                            </div>
-                          </div>
-                          <Button
-                            onClick={async () => {
-                              // Get destination address
-                              const destAddress = getDestinationAddress(addressesData.addresses);
-                              if (!destAddress) {
-                                setConsolidateModal({
-                                  open: true,
-                                  type: 'error',
-                                  title: 'Invalid Destination',
-                                  message: 'Please select a valid destination address.',
-                                });
-                                return;
-                              }
-
-                              if (address.bech32 === destAddress) {
-                                setConsolidateModal({
-                                  open: true,
-                                  type: 'error',
-                                  title: 'Invalid Operation',
-                                  message: 'Cannot consolidate an address to itself.',
-                                });
-                                return;
-                              }
-
-                              const destLabel = destinationMode === 'custom'
-                                ? `custom address ${destAddress.slice(0, 12)}...`
-                                : `address #${destinationAddressIndex}`;
-
-                              // Store the consolidation handler
-                              consolidateHandlerRef.current = async (password: string) => {
-                                try {
-                                  // Sign the donation message server-side (keeps seed phrase secure)
-                                  const signResponse = await fetch('/api/wallet/sign', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                      password,
-                                      sourceAddressIndex: address.index,
-                                      sourceAddress: address.bech32,
-                                      destinationAddress: destAddress,
-                                    }),
-                                  });
-
-                                    const signData = await signResponse.json();
-                                    if (!signData.success) {
-                                      setConsolidateModal({
-                                        open: true,
-                                        type: 'error',
-                                        title: 'Authentication Error',
-                                        message: signData.error || 'Failed to sign message.',
-                                      });
-                                      return;
-                                    }
-
-                                    // Send signature to backend
-                                    const donateResponse = await fetch('/api/consolidate/donate', {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({
-                                        sourceAddress: address.bech32,
-                                        sourceIndex: address.index,
-                                        destinationAddress: destAddress,
-                                        destinationIndex: destinationMode === 'wallet' ? destinationAddressIndex : undefined,
-                                        destinationMode,
-                                        signature: signData.signature,
-                                      }),
-                                    });
-
-                                    const donateData = await donateResponse.json();
-
-                                    if (donateData.success) {
-                                      // Refresh consolidation history after successful consolidation
-                                      await fetchConsolidationHistory();
-
-                                      setConsolidateModal({
-                                        open: true,
-                                        type: 'success',
-                                        title: 'Success!',
-                                        message: `Consolidated ${donateData.solutionsConsolidated || 0} solutions from address #${address.index} to ${destLabel}.`,
-                                      });
-                                    } else {
-                                      setConsolidateModal({
-                                        open: true,
-                                        type: 'error',
-                                        title: 'Consolidation Failed',
-                                        message: donateData.error || 'Failed to consolidate address.',
-                                      });
-                                    }
-                                  } catch (err: any) {
-                                    console.error('[Consolidate] Error:', err);
-                                    setConsolidateModal({
-                                      open: true,
-                                      type: 'error',
-                                      title: 'Error',
-                                      message: err.message || 'An error occurred during consolidation.',
-                                    });
-                                  }
-                                };
-
-                              // Show password modal
-                              setModalPassword('');
-                              modalPasswordRef.current = '';
-                              setConsolidateModal({
-                                open: true,
-                                type: 'password',
-                                title: 'Confirm Consolidation',
-                                message: `Consolidate address #${address.index} to ${destLabel}?\n\nEnter your wallet password to continue.`,
-                                requirePassword: true,
-                                onConfirm: async () => {
-                                  if (consolidateHandlerRef.current && modalPasswordRef.current) {
-                                    await consolidateHandlerRef.current(modalPasswordRef.current);
-                                  }
-                                },
-                              });
-                            }}
-                            size="sm"
-                            variant="outline"
-                            className="flex-shrink-0"
-                            disabled={address.index === destinationAddressIndex}
-                          >
-                            {address.index === destinationAddressIndex ? 'Destination' : 'Consolidate'}
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
+                              ) : (
+                                <span className="text-blue-400">#{record.sourceIndex}</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 font-mono text-xs">
+                              {record.destinationAddress ? (
+                                <span className="text-gray-300" title={record.destinationAddress}>
+                                  {record.destinationAddress.slice(0, 8)}...{record.destinationAddress.slice(-6)}
+                                </span>
+                              ) : record.destinationIndex !== undefined ? (
+                                <span className="text-blue-400">#{record.destinationIndex}</span>
+                              ) : (
+                                <span className="text-gray-400">External</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-white font-semibold text-right">
+                              {record.solutionsConsolidated || 0}
+                            </td>
+                            <td className="py-3 px-3 text-center">
+                              {record.status === 'success' ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900/30 text-green-400 border border-green-700/50">
+                                  <CheckCircle2 className="w-3 h-3 mr-1" />
+                                  Success
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-900/30 text-red-400 border border-red-700/50">
+                                  <XCircle className="w-3 h-3 mr-1" />
+                                  Failed
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {consolidationHistory.length > 50 && (
+                      <p className="text-xs text-gray-500 text-center py-2">
+                        Showing first 50 of {consolidationHistory.length} records. Download for full history.
+                      </p>
+                    )}
                   </div>
-                ) : addressesLoading ? (
-                  <div className="text-center py-8">
-                    <Loader2 className="w-8 h-8 animate-spin text-blue-500 mx-auto mb-2" />
-                    <p className="text-gray-400">Loading addresses...</p>
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    <p>No addresses found. Please start mining at least once to generate addresses.</p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            )}
 
-            {/* Info Card */}
-            <Card variant="bordered">
-              <CardHeader>
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <Info className="w-4 h-4 text-blue-400" />
-                  How Continuous Consolidation Works
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-1 text-xs text-gray-400">
-                  <p>• Runs in a continuous loop, consolidating all addresses to index {destinationAddressIndex}</p>
-                  <p>• Each cycle processes all addresses with 2-second delays between requests</p>
-                  <p>• After completing a cycle, waits 5 seconds before starting the next cycle</p>
-                  <p>• The table updates in real-time showing the status of each address</p>
-                  <p>• Click Stop to halt the consolidation process at any time</p>
-                </div>
-              </CardContent>
-            </Card>
           </div>
         )}
 
-        {/* Diagnostics Tab */}
-        {activeTab === 'diagnostics' && (
+        {/* Diagnostics Tab - REMOVED, now part of Settings tab */}
+        {false && (
           <div className="space-y-6">
             <Card variant="bordered">
               <CardHeader>
@@ -4124,6 +4580,26 @@ function MiningDashboardContent() {
             <Card variant="bordered">
               <CardHeader>
                 <div className="flex flex-col gap-3">
+                  {/* Registration Progress Banner (shown in logs section too) */}
+                  {stats?.active && isRegistering && registrationProgress && (
+                    <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 flex-1">
+                          <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                          <span className="text-sm text-gray-300">
+                            Registering addresses: {registrationProgress?.current} / {registrationProgress?.total}
+                          </span>
+                        </div>
+                        <div className="w-32 bg-gray-700 rounded-full h-2 overflow-hidden">
+                          <div
+                            className="bg-blue-500 h-full transition-all duration-300"
+                            style={{ width: `${((registrationProgress?.current || 0) / (registrationProgress?.total || 1)) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-xl flex items-center gap-2">
                       <Terminal className="w-5 h-5 text-blue-400" />
@@ -4284,8 +4760,8 @@ function MiningDashboardContent() {
           </div>
         )}
 
-        {/* Dev Fee Tab */}
-        {activeTab === 'devfee' && (
+        {/* Dev Fee Tab - REMOVED entirely */}
+        {false && (
           <div className="space-y-6">
             {/* Dev Fee Explanation Card */}
             <Card variant="bordered" className="bg-gradient-to-br from-blue-900/20 to-purple-900/20">
@@ -4401,7 +4877,7 @@ function MiningDashboardContent() {
                             <p className="text-green-400 font-semibold">Development Fee Enabled</p>
                             <p className="text-gray-300 text-sm mt-1">
                               Thank you for supporting the development of this application!
-                              1 in 17 solutions will contribute to continued improvements.
+                              1 in 15 solutions will contribute to continued improvements.
                             </p>
                           </div>
                         </>
@@ -4455,81 +4931,6 @@ function MiningDashboardContent() {
         <div className="space-y-4">
           <p className="text-gray-300 whitespace-pre-line">{consolidateModal.message}</p>
 
-          {consolidateModal.type === 'mode-select' && (
-            <div className="space-y-4">
-              {/* Checkbox for including next 10 unused addresses */}
-              <div className="p-4 bg-gray-800/50 border border-gray-700 rounded-lg">
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={includeNextUnused}
-                    onChange={(e) => setIncludeNextUnused(e.target.checked)}
-                    className="mt-1 w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0"
-                  />
-                  <div className="flex-1">
-                    <div className="font-medium text-gray-200">Include next 10 unused addresses</div>
-                    <div className="text-sm text-gray-400 mt-1">
-                      Consolidate from the selected addresses <strong>plus</strong> the next 10 unused addresses.
-                      This helps catch any new rewards that may have been earned on upcoming addresses.
-                    </div>
-                  </div>
-                </label>
-              </div>
-
-              <button
-                onClick={async () => {
-                  setConsolidateMode('receipts');
-                  setConsolidateModal(prev => ({ ...prev, open: false }));
-                  // Small delay to let modal close, then start consolidation
-                  await new Promise(resolve => setTimeout(resolve, 100));
-                  // Trigger password modal for receipts mode
-                  startConsolidationFlow('receipts', includeNextUnused);
-                }}
-                className="w-full p-4 bg-blue-500/20 border-2 border-blue-500 rounded-lg text-left hover:bg-blue-500/30 transition-all group"
-              >
-                <div className="flex items-start gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" />
-                  <div>
-                    <div className="font-semibold text-blue-400 mb-1">Addresses with Receipts (Recommended)</div>
-                    <div className="text-sm text-gray-400">
-                      Only consolidate addresses that have tracked receipts. This is faster and more efficient.
-                      {addressesData?.addresses && (
-                        <span className="block mt-1 text-blue-300 font-medium">
-                          ~{addressesData.addresses.length} addresses
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </button>
-
-              <button
-                onClick={async () => {
-                  setConsolidateMode('all-registered');
-                  setConsolidateModal(prev => ({ ...prev, open: false }));
-                  // Small delay to let modal close, then start consolidation
-                  await new Promise(resolve => setTimeout(resolve, 100));
-                  // Trigger password modal for all-registered mode
-                  startConsolidationFlow('all-registered', includeNextUnused);
-                }}
-                className="w-full p-4 bg-purple-500/20 border-2 border-purple-500 rounded-lg text-left hover:bg-purple-500/30 transition-all group"
-              >
-                <div className="flex items-start gap-3">
-                  <Zap className="w-5 h-5 text-purple-400 flex-shrink-0 mt-0.5" />
-                  <div>
-                    <div className="font-semibold text-purple-400 mb-1">All Registered Addresses (Thorough)</div>
-                    <div className="text-sm text-gray-400">
-                      Consolidate all 200 registered addresses in your wallet. Slower but ensures no rewards are missed.
-                      <span className="block mt-1 text-yellow-400 font-medium">
-                        ⏱ May take 10-15 minutes
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </button>
-            </div>
-          )}
-
           {consolidateModal.type === 'password' && (
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -4555,16 +4956,7 @@ function MiningDashboardContent() {
           )}
 
           <div className="flex gap-3 justify-end">
-            {consolidateModal.type === 'mode-select' ? (
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setConsolidateModal(prev => ({ ...prev, open: false }));
-                }}
-              >
-                Cancel
-              </Button>
-            ) : consolidateModal.type === 'confirm' || consolidateModal.type === 'password' ? (
+            {consolidateModal.type === 'confirm' || consolidateModal.type === 'password' ? (
               <>
                 <Button
                   variant="ghost"

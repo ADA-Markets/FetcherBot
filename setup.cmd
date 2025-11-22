@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM Midnight Fetcher Bot - Windows Setup Script
+REM Fetcher Bot - Windows Setup Script
 REM ============================================================================
 REM This script performs complete setup:
 REM 1. Checks/installs Node.js 20.x
@@ -16,7 +16,7 @@ setlocal enabledelayedexpansion
 
 echo.
 echo ================================================================================
-echo                    Midnight Fetcher Bot - Setup
+echo                    Fetcher Bot - Setup
 echo ================================================================================
 echo.
 
@@ -134,7 +134,7 @@ REM ============================================================================
 echo [4/5] Verifying setup...
 echo.
 echo NOTE: Your wallet and mining data will be stored in:
-echo   %USERPROFILE%\Documents\MidnightFetcherBot\
+echo   %USERPROFILE%\Documents\FetcherBot\
 echo.
 echo This allows you to update the software without losing your data.
 echo.
@@ -154,7 +154,12 @@ echo Starting hash server on port 9001...
 set RUST_LOG=hash_server=info,actix_web=warn
 set HOST=127.0.0.1
 set PORT=9001
-set WORKERS=12
+
+REM Auto-detect CPU cores for optimal hash server workers
+set WORKERS=%NUMBER_OF_PROCESSORS%
+if not defined WORKERS set WORKERS=8
+
+echo   - Using %WORKERS% hash server workers (detected %NUMBER_OF_PROCESSORS% CPU cores)
 
 start "Hash Server" /MIN hashengine\target\release\hash-server.exe
 echo   - Hash server started (running in background window)
@@ -175,11 +180,11 @@ echo   - Hash server is ready!
 echo.
 
 echo ================================================================================
-echo                    Midnight Fetcher Bot - Ready!
+echo                    Fetcher Bot - Ready!
 echo ================================================================================
 echo.
 echo Hash Service: http://127.0.0.1:9001/health
-echo Web Interface: http://localhost:3000
+echo Web Interface: http://localhost:3001
 echo.
 echo The application will open in your default browser.
 echo Press Ctrl+C to stop the Next.js server (hash server will continue running)
@@ -209,7 +214,24 @@ REM Wait for Next.js to be ready
 echo Waiting for Next.js to initialize...
 timeout /t 5 /nobreak >nul
 
+:check_nextjs_health
+curl -s http://localhost:3001/api/profiles >nul 2>&1
+if %errorlevel% neq 0 (
+    echo   - Waiting for Next.js server...
+    timeout /t 2 /nobreak >nul
+    goto check_nextjs_health
+)
 echo   - Next.js server is ready!
+echo.
+
+REM Refresh mining profiles from remote server
+echo Fetching latest mining profiles...
+curl -s -X POST http://localhost:3001/api/profiles/refresh >nul 2>&1
+if %errorlevel% equ 0 (
+    echo   - Mining profiles updated from remote server
+) else (
+    echo   - Could not fetch remote profiles (will use local profiles)
+)
 echo.
 
 REM Open browser to main app (not hash server)

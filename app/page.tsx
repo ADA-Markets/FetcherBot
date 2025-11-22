@@ -8,23 +8,64 @@ import { Wallet, Plus, LogIn, Loader2, Sparkles, Shield, Zap, ChevronRight, Gith
 import { Alert } from '@/components/ui/alert';
 import { cn } from '@/lib/utils';
 
+interface ActiveProfile {
+  id: string;
+  name: string;
+  fullName: string;
+  token: {
+    ticker: string;
+    name: string;
+  };
+  branding: {
+    colors: {
+      primary: string;
+      secondary: string;
+      accent: string;
+    };
+    description: string;
+  };
+}
+
 export default function Home() {
   const router = useRouter();
   const [walletExists, setWalletExists] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [hoveredCard, setHoveredCard] = useState<number | null>(null);
+  const [activeProfile, setActiveProfile] = useState<ActiveProfile | null>(null);
 
   useEffect(() => {
-    checkWalletStatus();
+    initializeApp();
   }, []);
 
-  const checkWalletStatus = async () => {
+  const initializeApp = async () => {
     try {
+      // Check if user wants to see profile selector on first launch
+      const skipProfileSelect = sessionStorage.getItem('skipProfileSelect');
+
+      // Initialize profile system first
+      await fetch('/api/init');
+
+      // Load active profile for branding
+      const profileRes = await fetch('/api/profile');
+      const profileData = await profileRes.json();
+      if (profileData.success && profileData.profile) {
+        setActiveProfile(profileData.profile);
+      }
+
+      // If first time user and hasn't explicitly skipped, optionally redirect to profile selector
+      // For now, we'll let users access it via the "Switch Project" button
+      // To enable first-launch redirect, uncomment:
+      // if (!skipProfileSelect && !walletExists) {
+      //   router.push('/select-profile');
+      //   return;
+      // }
+
+      // Then check wallet status
       const response = await fetch('/api/wallet/status');
       const data = await response.json();
       setWalletExists(data.exists);
     } catch (error) {
-      console.error('Failed to check wallet status:', error);
+      console.error('Failed to initialize app:', error);
     } finally {
       setLoading(false);
     }
@@ -38,11 +79,16 @@ export default function Home() {
             <Loader2 className="w-16 h-16 animate-spin text-blue-500 mx-auto" />
             <div className="absolute inset-0 w-16 h-16 bg-blue-500/20 rounded-full blur-xl mx-auto animate-pulse" />
           </div>
-          <p className="text-lg text-gray-400 animate-pulse">Initializing Midnight Fetcher Bot...</p>
+          <p className="text-lg text-gray-400 animate-pulse">Initializing...</p>
         </div>
       </div>
     );
   }
+
+  // Use active profile for branding, fallback to defaults
+  const profileName = activeProfile?.name || 'Defensio';
+  const profileFullName = activeProfile?.fullName || 'Defensio Fetcher Bot';
+  const profileDescription = activeProfile?.branding?.description || 'Mining application for Defensio DFO';
 
   const features = [
     {
@@ -110,12 +156,21 @@ export default function Home() {
                 <Sparkles className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h2 className="text-white font-bold text-lg">Midnight Fetcher</h2>
+                <h2 className="text-white font-bold text-lg">{profileName} Fetcher</h2>
                 <p className="text-gray-400 text-xs">Mining Platform</p>
               </div>
             </div>
 
             <div className="flex items-center gap-3">
+              <Button
+                onClick={() => router.push('/select-profile')}
+                variant="ghost"
+                size="sm"
+                className="text-purple-400 hover:text-purple-300 hover:bg-purple-500/10"
+              >
+                <Sparkles className="w-4 h-4 mr-2" />
+                Switch Project
+              </Button>
               <Button variant="ghost" size="sm" className="text-gray-400 hover:text-white">
                 <BookOpen className="w-4 h-4 mr-2" />
                 Docs
@@ -130,38 +185,23 @@ export default function Home() {
 
         {/* Main Content */}
         <main className="flex-1 flex items-center justify-center p-8">
-          <div className="max-w-7xl w-full space-y-16">
+          <div className="max-w-7xl w-full space-y-6">
 
             {/* Hero Section */}
-            <div className="text-center space-y-6 animate-fade-in">
+            <div className="text-center space-y-2 animate-fade-in">
               <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500/10 border border-blue-500/20 rounded-full text-blue-300 text-sm font-medium backdrop-blur-sm hover:bg-blue-500/20 transition-all">
                 <Sparkles className="w-4 h-4 animate-pulse" />
-                <span>Windows Mining Application</span>
+                <span>Multi-Project Mining Platform</span>
                 <ChevronRight className="w-3 h-3" />
               </div>
 
-              <div className="space-y-4">
-                <h1 className="text-6xl md:text-8xl font-black tracking-tight">
+              <div className="space-y-1">
+                <h1 className="text-5xl font-black tracking-tight">
                   <span className="bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent animate-gradient-x">
-                    Midnight Fetcher Bot
+                    {profileFullName}
                   </span>
                 </h1>
 
-                <p className="text-xl md:text-2xl text-gray-400 max-w-3xl mx-auto leading-relaxed">
-                  <span className="text-blue-400 font-semibold">mining</span> platform
-                  built with <span className="text-orange-400 font-semibold">Rust</span> for maximum performance
-                </p>
-              </div>
-
-              {/* Status Badge */}
-              <div className="flex items-center justify-center gap-4 pt-4">
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-green-500/10 border border-green-500/20 rounded-full">
-                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-                  <span className="text-green-400 text-sm font-medium">System Online</span>
-                </div>
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-full">
-                  <span className="text-blue-400 text-sm font-medium">v1.0.0</span>
-                </div>
               </div>
             </div>
 
@@ -250,52 +290,6 @@ export default function Home() {
               </Card>
             </div>
 
-            {/* Feature Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {features.map((feature, index) => {
-                const Icon = feature.icon;
-                return (
-                  <div
-                    key={index}
-                    className={cn(
-                      "group relative p-6 rounded-2xl border border-gray-800 bg-gray-900/50 backdrop-blur-sm transition-all duration-300 hover:scale-105 hover:border-gray-700",
-                      hoveredCard === index && "border-gray-700"
-                    )}
-                    onMouseEnter={() => setHoveredCard(index)}
-                    onMouseLeave={() => setHoveredCard(null)}
-                    style={{
-                      animationDelay: `${index * 100}ms`
-                    }}
-                  >
-                    {/* Hover Glow Effect */}
-                    <div className={cn(
-                      "absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 blur-xl",
-                      `bg-gradient-to-br ${feature.gradient}`
-                    )} style={{ zIndex: -1 }} />
-
-                    <div className="relative space-y-4">
-                      <div className={cn(
-                        "w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-300",
-                        `bg-gradient-to-br ${feature.gradient}`,
-                        "group-hover:scale-110 group-hover:rotate-3"
-                      )}>
-                        <Icon className="w-6 h-6 text-white" />
-                      </div>
-
-                      <div>
-                        <h3 className="text-white font-semibold text-lg mb-1 group-hover:text-white transition-colors">
-                          {feature.title}
-                        </h3>
-                        <p className="text-gray-400 text-sm leading-relaxed">
-                          {feature.description}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
           </div>
         </main>
 
@@ -306,12 +300,12 @@ export default function Home() {
               <div className="flex items-center gap-2">
                 <span>Made with</span>
                 <span className="text-red-400 animate-pulse">♥</span>
-                <span>for Windows</span>
+                <span>by the community</span>
               </div>
 
               <div className="flex items-center gap-4">
                 <span>Powered by</span>
-                <span className="text-blue-400 font-semibold">Midnight Network</span>
+                <span className="text-blue-400 font-semibold">Paul & Paddy</span>
               </div>
 
               <div className="flex items-center gap-2">

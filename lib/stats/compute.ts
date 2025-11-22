@@ -1,6 +1,6 @@
 /**
  * Statistics Computation
- * Calculates mining statistics from receipts including STAR/NIGHT rewards
+ * Calculates mining statistics from receipts including DFO rewards
  */
 
 import 'server-only';
@@ -12,24 +12,21 @@ export interface DayStats {
   date: string;
   receipts: number;
   addresses?: number;
-  star: number;
-  night: number;
+  dfo: number;
 }
 
 export interface HourStats {
   hour: string; // ISO hour string like "2025-10-31T23:00:00"
   receipts: number;
   addresses: number;
-  star: number;
-  night: number;
+  dfo: number;
 }
 
 export interface AddressStats {
   address: string;
   days: DayStats[];
   totalReceipts: number;
-  totalStar: number;
-  totalNight: number;
+  totalDfo: number;
   firstSolution?: string;
   lastSolution?: string;
 }
@@ -43,13 +40,12 @@ export interface GlobalStats {
   endDate?: string;
   grandTotal: {
     receipts: number;
-    star: number;
-    night: number;
+    dfo: number;
   };
 }
 
 /**
- * Fetch STAR rates from the API
+ * Fetch DFO rates from the API
  * Returns array where rates[0] is day 1, rates[1] is day 2, etc.
  */
 export async function fetchRates(apiBase: string): Promise<number[]> {
@@ -90,7 +86,7 @@ function dateFromChallengeId(challengeId: string): string {
 }
 
 /**
- * Compute statistics from receipts with STAR/NIGHT rewards
+ * Compute statistics from receipts with DFO rewards
  */
 export function computeStats(receipts: ReceiptEntry[], rates: number[]): GlobalStats {
   if (receipts.length === 0) {
@@ -101,8 +97,7 @@ export function computeStats(receipts: ReceiptEntry[], rates: number[]): GlobalS
       byAddress: [],
       grandTotal: {
         receipts: 0,
-        star: 0,
-        night: 0,
+        dfo: 0,
       },
     };
   }
@@ -135,28 +130,26 @@ export function computeStats(receipts: ReceiptEntry[], rates: number[]): GlobalS
   for (const [address, dayMap] of addressDayMap.entries()) {
     const days: DayStats[] = [];
     let totalReceipts = 0;
-    let totalStar = 0;
+    let totalDfo = 0;
 
     for (const [day, count] of dayMap.entries()) {
       const challengeId = `**D${day.toString().padStart(2, '0')}C00`;
       const date = dateFromChallengeId(challengeId);
 
-      // Calculate STAR and NIGHT
+      // Calculate DFO
       const rateIndex = day - 1;
-      const starPerReceipt = rates[rateIndex] || 0;
-      const star = count * starPerReceipt;
-      const night = star / 1_000_000;
+      const dfoPerReceipt = rates[rateIndex] || 0;
+      const dfo = count * dfoPerReceipt;
 
       days.push({
         day,
         date,
         receipts: count,
-        star,
-        night,
+        dfo,
       });
 
       totalReceipts += count;
-      totalStar += star;
+      totalDfo += dfo;
     }
 
     // Sort days descending (most recent first)
@@ -169,8 +162,7 @@ export function computeStats(receipts: ReceiptEntry[], rates: number[]): GlobalS
       address,
       days,
       totalReceipts,
-      totalStar,
-      totalNight: totalStar / 1_000_000,
+      totalDfo,
       firstSolution: timestamps[0],
       lastSolution: timestamps[timestamps.length - 1],
     });
@@ -198,19 +190,17 @@ export function computeStats(receipts: ReceiptEntry[], rates: number[]): GlobalS
     // Count total receipts for this day
     const receiptsThisDay = receipts.filter(r => dayFromChallengeId(r.challenge_id) === day).length;
 
-    // Calculate STAR and NIGHT for this day
+    // Calculate DFO for this day
     const rateIndex = day - 1;
-    const starPerReceipt = rates[rateIndex] || 0;
-    const star = receiptsThisDay * starPerReceipt;
-    const night = star / 1_000_000;
+    const dfoPerReceipt = rates[rateIndex] || 0;
+    const dfo = receiptsThisDay * dfoPerReceipt;
 
     days.push({
       day,
       date,
       receipts: receiptsThisDay,
       addresses: addresses.size,
-      star,
-      night,
+      dfo,
     });
   }
 
@@ -220,8 +210,7 @@ export function computeStats(receipts: ReceiptEntry[], rates: number[]): GlobalS
   // Grand total
   const grandTotal = {
     receipts: receipts.length,
-    star: byAddress.reduce((sum, a) => sum + a.totalStar, 0),
-    night: byAddress.reduce((sum, a) => sum + a.totalNight, 0),
+    dfo: byAddress.reduce((sum, a) => sum + a.totalDfo, 0),
   };
 
   return {
@@ -253,19 +242,17 @@ export function getTodayStats(receipts: ReceiptEntry[], rates: number[]): DaySta
   const addresses = new Set(todayReceipts.map(r => r.address));
   const day = dayFromChallengeId(todayReceipts[0].challenge_id);
 
-  // Calculate STAR and NIGHT
+  // Calculate DFO
   const rateIndex = day - 1;
-  const starPerReceipt = rates[rateIndex] || 0;
-  const star = todayReceipts.length * starPerReceipt;
-  const night = star / 1_000_000;
+  const dfoPerReceipt = rates[rateIndex] || 0;
+  const dfo = todayReceipts.length * dfoPerReceipt;
 
   return {
     day,
     date: today,
     receipts: todayReceipts.length,
     addresses: addresses.size,
-    star,
-    night,
+    dfo,
   };
 }
 
@@ -316,31 +303,27 @@ export function computeHourlyStats(receipts: ReceiptEntry[], rates: number[]): H
       hour: previousHourStart.toISOString(),
       receipts: 0,
       addresses: 0,
-      star: 0,
-      night: 0
+      dfo: 0
     };
   }
 
   // Count unique addresses
   const uniqueAddresses = new Set(hourReceipts.map(r => r.address));
 
-  // Calculate STAR earnings
-  let totalStar = 0;
+  // Calculate DFO earnings
+  let totalDfo = 0;
   for (const receipt of hourReceipts) {
     const day = dayFromChallengeId(receipt.challenge_id);
     const rateIndex = day - 1;
-    const starPerReceipt = rates[rateIndex] || 0;
-    totalStar += starPerReceipt;
+    const dfoPerReceipt = rates[rateIndex] || 0;
+    totalDfo += dfoPerReceipt;
   }
-
-  const totalNight = totalStar / 1_000_000;
 
   return {
     hour: previousHourStart.toISOString(),
     receipts: hourReceipts.length,
     addresses: uniqueAddresses.size,
-    star: totalStar,
-    night: totalNight
+    dfo: totalDfo
   };
 }
 
@@ -374,23 +357,20 @@ export function computeLastNHours(receipts: ReceiptEntry[], rates: number[], hou
     // Count unique addresses
     const uniqueAddresses = new Set(hourReceipts.map(r => r.address));
 
-    // Calculate STAR earnings
-    let totalStar = 0;
+    // Calculate DFO earnings
+    let totalDfo = 0;
     for (const receipt of hourReceipts) {
       const day = dayFromChallengeId(receipt.challenge_id);
       const rateIndex = day - 1;
-      const starPerReceipt = rates[rateIndex] || 0;
-      totalStar += starPerReceipt;
+      const dfoPerReceipt = rates[rateIndex] || 0;
+      totalDfo += dfoPerReceipt;
     }
-
-    const totalNight = totalStar / 1_000_000;
 
     result.push({
       hour: hourStart.toISOString(),
       receipts: hourReceipts.length,
       addresses: uniqueAddresses.size,
-      star: totalStar,
-      night: totalNight
+      dfo: totalDfo
     });
   }
 

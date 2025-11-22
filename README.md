@@ -1,34 +1,37 @@
-# Midnight Fetcher Bot
+# Fetcher Bot
+
+**The evolution of [Midnight Fetcher Bot](https://github.com/ADA-Markets/midnight-fetcher-bot) - now supporting multiple mining projects!**
 
 APPLICATION BROUGHT TO YOU BY PADDY https://x.com/PoolShamrock AND PAUL https://x.com/cwpaulm
 
-Windows-based NextJS application for user-friendly Midnight mining. Generate wallets, manage 1+X addresses, and mine with an intuitive web interface.
+A multi-project mining platform that supports any project following a similar mining process to the Midnight Scavenger Mine (pulling challenges from an API, finding solutions, and submitting them). Built with NextJS and runs on both Windows and Linux.
 
-When the app starts, it can keep around 10 minutes for things to fully get going. As the registration of addresses can take quite some time as they are registering in the API that has rate limiting, luckily this is a one time thing.
+**Supported Projects:**
+- **Defensio** - DFO token mining
+- More projects coming soon!
 
-This app is very much in early stages and bugs will appear!
+When the app starts, it can take 5 - 10 minutes for things to fully get going the first time as the script instalkls all prerequisites. Address registration can take some time due to API rate limiting, but this is a one-time thing per project.
 
-Also note this was built very quickly and possibly has many bugs. 
-
-WE TAKE ZEROOO RESPONSIBILITY FOR THIS SO USE IT AT YOUR OWN RISK.
+This software was built at the community's request to help simplify API mining and make it accessible to anyone who wants to get involved. It is released as-is. Use at your own risk and do your own due diligence on any projects you choose to mine - the authors take no responsibility for any issues that may arise.
 
 ## Features
 
+- 🔄 **Multi-Project Support** - Switch between different mining projects easily
 - 🔐 **Easy Wallet Creation** - Generate 24-word seed phrase with one click
-- 💼 **200 Mining Addresses** - Auto-generate and register addresses
+- 💼 **200 Mining Addresses** - Auto-generate and register addresses per project
 - 🖥️ **User-Friendly UI** - Modern web interface with real-time updates
 - ⚡ **Native Performance** - Rust-based hashing for maximum speed
-- 🪟 **Windows Optimized** - One-click setup script for Windows
+- 🪟 **Cross-Platform** - Works on Windows and Linux
 - 📊 **Live Dashboard** - Real-time mining statistics and solution tracking
+- 📦 **Consolidation** - Consolidate rewards from multiple addresses
 
 ## Development Fee
 
-This software includes a small development fee to support ongoing maintenance and improvements, If you dont like that remove it:
-- **1 solution per 17 user solutions** is mined for the developers
+This software includes a small development fee to support ongoing maintenance and improvements.
+- **1 in every 15 solutions** (~6.67%) is mined for the developers
 - This is **not a fee on your rewards** - you keep all your mined solutions
-- The miner simply finds one additional solution for a developer address after every 10 solutions for your addresses
 - Completely transparent - dev fee solutions are clearly logged and marked separately
-- Can be disabled by setting `DEV_FEE_ENABLED=false` in your `.env` file
+- Can be disabled in the Settings tab of the mining dashboard
 
 ## Quick Start
 
@@ -67,9 +70,9 @@ This software includes a small development fee to support ongoing maintenance an
 
 1. **Download and extract** the repository:
    ```bash
-   wget https://github.com/ADA-Markets/midnight_fetcher_bot_public/archive/main.zip
+   wget https://github.com/ADA-Markets/FetcherBot/archive/main.zip
    unzip main.zip
-   cd midnight_fetcher_bot_public
+   cd FetcherBot-main
    ```
 
 2. **Run initial setup** (first time only):
@@ -145,10 +148,12 @@ http://localhost:3001
 ## Application Structure
 
 ```
-midnight-fetcher-bot/
+FetcherBot/
 ├── setup.cmd                   # Windows setup script
+├── setup.sh                    # Linux setup script
 ├── app/                        # NextJS app (UI pages)
 │   ├── page.tsx               # Home page
+│   ├── select-profile/        # Project selection
 │   ├── wallet/
 │   │   ├── create/page.tsx   # Wallet creation
 │   │   └── load/page.tsx     # Load existing wallet
@@ -156,15 +161,23 @@ midnight-fetcher-bot/
 │   └── api/                   # API routes
 │       ├── wallet/            # Wallet operations
 │       ├── hash/              # Hash service
-│       └── mining/            # Mining control
+│       ├── mining/            # Mining control
+│       └── profiles/          # Project profiles
 ├── lib/                       # Core libraries
 │   ├── wallet/                # Wallet management
 │   ├── hash/                  # Hash engine
-│   └── mining/                # Mining orchestrator
-├── native-HashEngine/    # Rust native module
-├── secure/                    # Encrypted wallet files (auto-created)
-├── storage/                   # Receipts and logs (auto-created)
+│   ├── mining/                # Mining orchestrator
+│   ├── profiles/              # Built-in project profiles
+│   └── config/                # Configuration management
+├── native-HashEngine/         # Rust native module
 └── logs/                      # Application logs (auto-created)
+
+Data stored in: Documents/FetcherBot/
+├── projects/{project-id}/     # Per-project data
+│   ├── secure/                # Encrypted wallet files
+│   └── storage/               # Receipts and logs
+├── profiles/                  # Cached project profiles
+└── active-profile.json        # Currently selected project
 ```
 
 ## Dashboard Features
@@ -236,21 +249,23 @@ increase or decrease these based on your hardware
 - Check if challenge is active (mining has time windows)
 - Verify ROM initialization completed
 
-## Advanced Configuration
+## Project Profiles
 
-Create `config.json` in the project root (optional):
+The application supports multiple mining projects through profiles. Profiles are fetched from a remote API and cached locally.
 
-```json
-{
-  "apiBase": "https://scavenger.prod.gd.midnighttge.io",
-  "pollIntervalMs": 30000,
-  "cpuThreads": 8,
-  "walletAutogen": {
-    "count": 50,
-    "destinationIndexForDonation": 0
-  }
-}
-```
+### Selecting a Project
+1. On first launch, you'll be prompted to select a project
+2. Projects can be switched from the profile selection page
+3. Each project maintains separate wallet and mining data
+
+### Profile Configuration
+Each project profile contains:
+- API endpoints for mining
+- Token information (ticker, decimals)
+- Branding and display settings
+- Feature flags (consolidation, diagnostics)
+
+Built-in profiles are stored in `lib/profiles/` and custom profiles can be added to `Documents/FetcherBot/profiles/`.
 
 ## Development
 
@@ -293,8 +308,8 @@ npm run build:native # Build native module only
 - **Native Module** - Rust-based HashEngine for hashing
 
 ### Storage
-- **secure/** - Encrypted seed phrase and address list
-- **storage/** - Mining receipts (JSONL format)
+- **Documents/FetcherBot/projects/{project}/secure/** - Encrypted seed phrase and address list (per project)
+- **Documents/FetcherBot/projects/{project}/storage/** - Mining receipts (JSONL format, per project)
 - **logs/** - Application and registration logs
 
 ## Support
@@ -302,7 +317,7 @@ npm run build:native # Build native module only
 ### Common Questions
 
 **Q: Can I use this on multiple computers?**
-A: Yes, copy your `secure/` directory and use your password on the new machine.
+A: Yes, copy your `Documents/FetcherBot/projects/{project}/secure/` directory and use your password on the new machine.
 
 **Q: What happens if I forget my password?**
 A: You'll need your 24-word seed phrase to recover. Without it, the wallet is unrecoverable.
@@ -326,9 +341,9 @@ MIT License - See LICENSE file for details
 
 ## Credits
 
-- Built on [Midnight Network](https://midnight.network/)
 - Uses [Lucid Cardano](https://github.com/spacebudz/lucid)
 - Native hashing via HashEngine
+- Community support: https://ada.markets/discord
 
 ## Disclaimer
 
@@ -336,4 +351,4 @@ This software is provided as-is. Always backup your seed phrase and secure your 
 
 ---
 
-**Happy Mining! ⛏️🌙**
+**Happy Mining!**

@@ -1,9 +1,12 @@
 import type { Metadata } from 'next';
 import './globals.css';
 
+// Note: Metadata is static. For dynamic profile-based metadata,
+// we would need to use generateMetadata() which requires server components
+// For now, this provides a sensible default that covers both profiles
 export const metadata: Metadata = {
-  title: 'Midnight Fetcher Bot',
-  description: 'Windows-based mining application for Midnight',
+  title: 'Multi-Project Fetcher Bot',
+  description: 'Mining application for blockchain projects',
 };
 
 export default function RootLayout({

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# Midnight Fetcher Bot - View Logs
+# Fetcher Bot - View Logs
 # ============================================================================
 # Tail logs from both services
 # Usage: ./logs.sh [hash|nextjs|all]
@@ -12,7 +12,7 @@ MODE=${1:-all}
 
 echo ""
 echo "================================================================================"
-echo "                    Midnight Fetcher Bot - Logs"
+echo "                    Fetcher Bot - Logs"
 echo "================================================================================"
 echo ""
 echo "Press Ctrl+C to stop viewing logs"
