@@ -30,19 +30,21 @@ export interface ChallengeHistoryEntry {
 }
 
 class ChallengeHistoryLogger {
-  private historyFile: string;
+  private _historyFile: string | null = null;
   private history: Map<string, ChallengeHistoryEntry> = new Map();
   private initialized = false;
 
-  constructor() {
-    // Use profile-aware path resolver if available
+  private get historyFile(): string {
+    if (this._historyFile) return this._historyFile;
+
     let storageDir: string;
 
     try {
       // Try to use profile-specific path
       const { pathResolver } = require('@/lib/storage/path-resolver');
       storageDir = pathResolver.getStorageDir();
-    } catch (error) {
+      console.log(`[ChallengeHistory] Using profile-specific path: ${storageDir}`);
+    } catch (error: any) {
       // Fallback for legacy support
       const newDataDir = path.join(
         process.env.USERPROFILE || process.env.HOME || process.cwd(),
@@ -50,6 +52,7 @@ class ChallengeHistoryLogger {
         'FetcherBot'
       );
       storageDir = path.join(newDataDir, 'storage');
+      console.log(`[ChallengeHistory] Warning: No active profile, using legacy path: ${storageDir}`);
 
       // Ensure storage directory exists
       if (!fs.existsSync(storageDir)) {
@@ -57,7 +60,16 @@ class ChallengeHistoryLogger {
       }
     }
 
-    this.historyFile = path.join(storageDir, 'challenge-history.json');
+    this._historyFile = path.join(storageDir, 'challenge-history.json');
+    return this._historyFile;
+  }
+
+  // Reset cached path (call when profile changes)
+  resetPath(): void {
+    this._historyFile = null;
+    this.initialized = false;
+    this.history.clear();
+    console.log('[ChallengeHistory] Path cache cleared - will re-resolve on next access');
   }
 
   /**

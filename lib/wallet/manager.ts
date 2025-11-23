@@ -3,15 +3,21 @@ import path from 'path';
 import { Lucid, toHex } from 'lucid-cardano';
 import { encrypt, decrypt, EncryptedData } from './encryption';
 
-// Determine data directory: Use profile-aware path resolver if available,
-// otherwise fall back to legacy detection for backwards compatibility
-function determineDataDirectory(): string {
+// Lazy path resolution - determined at first use when profile is definitely loaded
+let _secureDir: string | null = null;
+
+function getSecureDir(): string {
+  if (_secureDir) return _secureDir;
+
   try {
     // Try to use profile-specific path
     const { pathResolver } = require('@/lib/storage/path-resolver');
-    return pathResolver.getSecureDir();
-  } catch (error) {
-    // Fallback for legacy support
+    const resolvedDir = pathResolver.getSecureDir();
+    _secureDir = resolvedDir;
+    console.log(`[Wallet] Using profile-specific path: ${resolvedDir}`);
+    return resolvedDir;
+  } catch (error: any) {
+    // Fallback for legacy support (only if profile not available)
     const oldSecureDir = path.join(process.cwd(), 'secure');
     const newDataDir = path.join(
       process.env.USERPROFILE || process.env.HOME || process.cwd(),
@@ -23,19 +29,64 @@ function determineDataDirectory(): string {
     const oldWalletFile = path.join(oldSecureDir, 'wallet-seed.json.enc');
     if (fs.existsSync(oldWalletFile)) {
       console.log(`[Wallet] Found existing wallet in installation folder`);
-      console.log(`[Wallet] Using: ${path.join(process.cwd(), 'secure')}`);
-      return oldSecureDir;
+      console.log(`[Wallet] Using: ${oldSecureDir}`);
+      _secureDir = oldSecureDir;
+      return _secureDir;
     }
 
-    // Otherwise use Documents folder (old default)
-    console.log(`[Wallet] Using Documents folder: ${newDataDir}/secure`);
-    return path.join(newDataDir, 'secure');
+    // Check if wallet exists in legacy flat Documents folder
+    const legacySecureDir = path.join(newDataDir, 'secure');
+    const legacyWalletFile = path.join(legacySecureDir, 'wallet-seed.json.enc');
+    if (fs.existsSync(legacyWalletFile)) {
+      console.log(`[Wallet] Found existing wallet in legacy location`);
+      console.log(`[Wallet] Using: ${legacySecureDir}`);
+      _secureDir = legacySecureDir;
+      return _secureDir;
+    }
+
+    // Check if wallet exists in any profile directory (safety net)
+    const projectsDir = path.join(newDataDir, 'projects');
+    if (fs.existsSync(projectsDir)) {
+      try {
+        const profiles = fs.readdirSync(projectsDir);
+        for (const profile of profiles) {
+          const profileSecureDir = path.join(projectsDir, profile, 'secure');
+          const profileWalletFile = path.join(profileSecureDir, 'wallet-seed.json.enc');
+          if (fs.existsSync(profileWalletFile)) {
+            console.log(`[Wallet] Found existing wallet in profile: ${profile}`);
+            console.log(`[Wallet] Using: ${profileSecureDir}`);
+            console.log(`[Wallet] Warning: Profile was not loaded, but wallet found. Consider selecting profile.`);
+            _secureDir = profileSecureDir;
+            return _secureDir;
+          }
+        }
+      } catch (scanError) {
+        console.error(`[Wallet] Error scanning profiles directory:`, scanError);
+      }
+    }
+
+    // No existing wallet found - use legacy path for new wallet
+    console.log(`[Wallet] No existing wallet found, using legacy path: ${legacySecureDir}`);
+    console.log(`[Wallet] Note: Select a profile to use profile-specific storage`);
+    console.log(`[Wallet] Error was: ${error.message}`);
+    _secureDir = legacySecureDir;
+    return _secureDir;
   }
 }
 
-const SECURE_DIR = determineDataDirectory();
-const SEED_FILE = path.join(SECURE_DIR, 'wallet-seed.json.enc');
-const DERIVED_ADDRESSES_FILE = path.join(SECURE_DIR, 'derived-addresses.json');
+function getSeedFile(): string {
+  return path.join(getSecureDir(), 'wallet-seed.json.enc');
+}
+
+function getDerivedAddressesFile(): string {
+  return path.join(getSecureDir(), 'derived-addresses.json');
+}
+
+// Reset cached path (call when profile changes)
+export function resetWalletPath(): void {
+  _secureDir = null;
+  console.log('[Wallet] Path cache cleared - will re-resolve on next access');
+}
 
 export interface DerivedAddress {
   index: number;
@@ -59,8 +110,9 @@ export class WalletManager {
    */
   async generateWallet(password: string, count: number = 40): Promise<WalletInfo> {
     // Ensure secure directory exists
-    if (!fs.existsSync(SECURE_DIR)) {
-      fs.mkdirSync(SECURE_DIR, { recursive: true, mode: 0o700 });
+    const secureDir = getSecureDir();
+    if (!fs.existsSync(secureDir)) {
+      fs.mkdirSync(secureDir, { recursive: true, mode: 0o700 });
     }
 
     // Generate 24-word mnemonic using Lucid
@@ -77,11 +129,11 @@ export class WalletManager {
 
     // Encrypt and save seed
     const encryptedData = encrypt(this.mnemonic, password);
-    fs.writeFileSync(SEED_FILE, JSON.stringify(encryptedData, null, 2), { mode: 0o600 });
+    fs.writeFileSync(getSeedFile(), JSON.stringify(encryptedData, null, 2), { mode: 0o600 });
 
     // Save derived addresses
     fs.writeFileSync(
-      DERIVED_ADDRESSES_FILE,
+      getDerivedAddressesFile(),
       JSON.stringify(this.derivedAddresses, null, 2),
       { mode: 0o600 }
     );
@@ -96,11 +148,11 @@ export class WalletManager {
    * Load existing wallet from encrypted file
    */
   async loadWallet(password: string): Promise<DerivedAddress[]> {
-    if (!fs.existsSync(SEED_FILE)) {
+    if (!fs.existsSync(getSeedFile())) {
       throw new Error('No wallet found. Please create a new wallet first.');
     }
 
-    const encryptedData: EncryptedData = JSON.parse(fs.readFileSync(SEED_FILE, 'utf8'));
+    const encryptedData: EncryptedData = JSON.parse(fs.readFileSync(getSeedFile(), 'utf8'));
 
     try {
       this.mnemonic = decrypt(encryptedData, password);
@@ -109,8 +161,8 @@ export class WalletManager {
     }
 
     // Load derived addresses if they exist
-    if (fs.existsSync(DERIVED_ADDRESSES_FILE)) {
-      this.derivedAddresses = JSON.parse(fs.readFileSync(DERIVED_ADDRESSES_FILE, 'utf8'));
+    if (fs.existsSync(getDerivedAddressesFile())) {
+      this.derivedAddresses = JSON.parse(fs.readFileSync(getDerivedAddressesFile(), 'utf8'));
     } else {
       throw new Error('Derived addresses file not found. Wallet may be corrupted.');
     }
@@ -122,7 +174,7 @@ export class WalletManager {
    * Check if wallet exists
    */
   walletExists(): boolean {
-    return fs.existsSync(SEED_FILE);
+    return fs.existsSync(getSeedFile());
   }
 
   /**
@@ -245,7 +297,7 @@ export class WalletManager {
 
       // Save updated addresses
       fs.writeFileSync(
-        DERIVED_ADDRESSES_FILE,
+        getDerivedAddressesFile(),
         JSON.stringify(this.derivedAddresses, null, 2),
         { mode: 0o600 }
       );

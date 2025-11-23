@@ -32,18 +32,21 @@ export interface ErrorLog {
 }
 
 class ReceiptsLogger {
-  private receiptsFile: string;
-  private errorsFile: string;
+  private _storageDir: string | null = null;
+  private _receiptsFile: string | null = null;
+  private _errorsFile: string | null = null;
 
-  constructor() {
-    // Use profile-aware path resolver if available
-    let storageDir: string;
+  private getStorageDir(): string {
+    if (this._storageDir) return this._storageDir;
 
     try {
       // Try to use profile-specific path
       const { pathResolver } = require('@/lib/storage/path-resolver');
-      storageDir = pathResolver.getStorageDir();
-    } catch (error) {
+      const resolvedDir = pathResolver.getStorageDir();
+      this._storageDir = resolvedDir;
+      console.log(`[Receipts] Using profile-specific path: ${resolvedDir}`);
+      return resolvedDir;
+    } catch (error: any) {
       // Fallback for legacy support
       const oldStorageDir = path.join(process.cwd(), 'storage');
       const newDataDir = path.join(
@@ -55,23 +58,44 @@ class ReceiptsLogger {
       // Check if receipts exist in old location (installation folder)
       const oldReceiptsFile = path.join(oldStorageDir, 'receipts.jsonl');
       if (fs.existsSync(oldReceiptsFile)) {
-        storageDir = oldStorageDir;
+        this._storageDir = oldStorageDir;
         console.log(`[Receipts] Found existing receipts in installation folder`);
-        console.log(`[Receipts] Using: ${storageDir}`);
+        console.log(`[Receipts] Using: ${this._storageDir}`);
       } else {
         // Otherwise use Documents folder (old default)
-        storageDir = path.join(newDataDir, 'storage');
-        console.log(`[Receipts] Using Documents folder: ${storageDir}`);
+        this._storageDir = path.join(newDataDir, 'storage');
+        console.log(`[Receipts] Warning: No active profile, using legacy path: ${this._storageDir}`);
+        console.log(`[Receipts] Error was: ${error.message}`);
       }
 
       // Ensure storage directory exists
-      if (!fs.existsSync(storageDir)) {
-        fs.mkdirSync(storageDir, { recursive: true });
+      if (!fs.existsSync(this._storageDir)) {
+        fs.mkdirSync(this._storageDir, { recursive: true });
       }
+      return this._storageDir;
     }
+  }
 
-    this.receiptsFile = path.join(storageDir, 'receipts.jsonl');
-    this.errorsFile = path.join(storageDir, 'errors.jsonl');
+  get receiptsFile(): string {
+    if (!this._receiptsFile) {
+      this._receiptsFile = path.join(this.getStorageDir(), 'receipts.jsonl');
+    }
+    return this._receiptsFile;
+  }
+
+  get errorsFile(): string {
+    if (!this._errorsFile) {
+      this._errorsFile = path.join(this.getStorageDir(), 'errors.jsonl');
+    }
+    return this._errorsFile;
+  }
+
+  // Reset cached paths (call when profile changes)
+  resetPaths(): void {
+    this._storageDir = null;
+    this._receiptsFile = null;
+    this._errorsFile = null;
+    console.log('[Receipts] Path cache cleared - will re-resolve on next access');
   }
 
   /**

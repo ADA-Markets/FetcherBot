@@ -20,17 +20,19 @@ export interface ConsolidationRecord {
 }
 
 class ConsolidationLogger {
-  private consolidationFile: string;
+  private _consolidationFile: string | null = null;
 
-  constructor() {
-    // Use profile-aware path resolver if available
+  private get consolidationFile(): string {
+    if (this._consolidationFile) return this._consolidationFile;
+
     let storageDir: string;
 
     try {
       // Try to use profile-specific path
       const { pathResolver } = require('@/lib/storage/path-resolver');
       storageDir = pathResolver.getStorageDir();
-    } catch (error) {
+      console.log(`[Consolidation] Using profile-specific path: ${storageDir}`);
+    } catch (error: any) {
       // Fallback for legacy support
       const oldStorageDir = path.join(process.cwd(), 'storage');
       const newDataDir = path.join(
@@ -47,7 +49,7 @@ class ConsolidationLogger {
       } else {
         // Otherwise use Documents folder (old default)
         storageDir = path.join(newDataDir, 'storage');
-        console.log(`[Consolidation] Using Documents folder: ${storageDir}`);
+        console.log(`[Consolidation] Warning: No active profile, using legacy path: ${storageDir}`);
       }
 
       // Ensure storage directory exists
@@ -56,7 +58,14 @@ class ConsolidationLogger {
       }
     }
 
-    this.consolidationFile = path.join(storageDir, 'consolidations.jsonl');
+    this._consolidationFile = path.join(storageDir, 'consolidations.jsonl');
+    return this._consolidationFile;
+  }
+
+  // Reset cached path (call when profile changes)
+  resetPath(): void {
+    this._consolidationFile = null;
+    console.log('[Consolidation] Path cache cleared - will re-resolve on next access');
   }
 
   /**

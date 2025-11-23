@@ -14,7 +14,7 @@ export interface MiningConfig {
 }
 
 class ConfigManager {
-  private configFile: string;
+  private _configFile: string | null = null;
   private defaultConfig: MiningConfig = {
     workerThreads: 11,
     batchSize: null, // null means use default
@@ -22,15 +22,17 @@ class ConfigManager {
     workersPerAddress: 5,
   };
 
-  constructor() {
-    // Use profile-aware path resolver if available
+  private get configFile(): string {
+    if (this._configFile) return this._configFile;
+
     let storageDir: string;
 
     try {
       // Try to use profile-specific path
       const { pathResolver } = require('@/lib/storage/path-resolver');
       storageDir = pathResolver.getStorageDir();
-    } catch (error) {
+      console.log(`[Config] Using profile-specific path: ${storageDir}`);
+    } catch (error: any) {
       // Fallback for legacy support
       const oldStorageDir = path.join(process.cwd(), 'storage');
       const newDataDir = path.join(
@@ -45,6 +47,7 @@ class ConfigManager {
         storageDir = oldStorageDir;
       } else {
         storageDir = path.join(newDataDir, 'storage');
+        console.log(`[Config] Warning: No active profile, using legacy path: ${storageDir}`);
       }
 
       // Ensure storage directory exists
@@ -53,7 +56,14 @@ class ConfigManager {
       }
     }
 
-    this.configFile = path.join(storageDir, 'mining-config.json');
+    this._configFile = path.join(storageDir, 'mining-config.json');
+    return this._configFile;
+  }
+
+  // Reset cached path (call when profile changes)
+  resetPath(): void {
+    this._configFile = null;
+    console.log('[Config] Path cache cleared - will re-resolve on next access');
   }
 
   /**

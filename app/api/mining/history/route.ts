@@ -36,6 +36,10 @@ export async function GET() {
     const receipts = receiptsLogger.readReceipts();
     const rawErrors = receiptsLogger.readErrors();
 
+    // DEBUG: Log raw counts
+    console.log(`[History API] Raw errors count: ${rawErrors.length}`);
+    console.log(`[History API] Receipts count: ${receipts.length}`);
+
     // Sort by timestamp descending (most recent first)
     receipts.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
     rawErrors.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
@@ -76,6 +80,9 @@ export async function GET() {
     // Convert deduplicated errors to array
     const uniqueErrors = Array.from(errorMap.values());
 
+    // DEBUG: Log unique errors count
+    console.log(`[History API] Unique errors (deduplicated): ${uniqueErrors.length}`);
+
     // Remove errors that have a matching successful receipt (solution was eventually successful)
     const successfulSolutions = new Set(
       receipts.map(r => `${r.address}:${r.challenge_id}:${r.nonce}`)
@@ -85,6 +92,9 @@ export async function GET() {
       const key = `${error.address}:${error.challenge_id}:${error.nonce}`;
       return !successfulSolutions.has(key);
     });
+
+    // DEBUG: Log failed errors count (after removing successes)
+    console.log(`[History API] Failed errors (excluding successes): ${failedErrors.length}`);
 
     // Sort failed errors by last attempt (most recent first)
     failedErrors.sort((a, b) => new Date(b.lastAttempt).getTime() - new Date(a.lastAttempt).getTime());
