@@ -3521,7 +3521,27 @@ function MiningDashboardContent() {
                         </p>
                       </div>
                       <button
-                        onClick={() => setPreferEasierChallenges(!preferEasierChallenges)}
+                        onClick={async () => {
+                          const newValue = !preferEasierChallenges;
+                          setPreferEasierChallenges(newValue);
+                          // Auto-save the toggle immediately
+                          try {
+                            await fetch('/api/mining/update-config', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                workerThreads: editedWorkerThreads,
+                                batchSize: editedBatchSize,
+                                workerGroupingMode,
+                                workersPerAddress,
+                                preferEasierChallenges: newValue,
+                                minChallengeTimeMinutes,
+                              }),
+                            });
+                          } catch (err) {
+                            console.error('Failed to auto-save preferEasierChallenges:', err);
+                          }
+                        }}
                         className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                           preferEasierChallenges ? 'bg-yellow-500' : 'bg-gray-600'
                         }`}
