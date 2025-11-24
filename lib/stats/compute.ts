@@ -73,20 +73,44 @@ export function dayFromChallengeId(challengeId: string): number {
   return parseInt(match[1], 10);
 }
 
+// Mining start date for Defensio - Day 1 = 2025-11-20
+// This is when mining began, not the TGE (token generation event)
+const MINING_START_DATE = '2025-11-20';
+
 /**
  * Get date string from challenge_id
- * Day 1 started on 2025-10-30 (updated from incorrect 2025-01-16)
  */
 function dateFromChallengeId(challengeId: string): string {
   const day = dayFromChallengeId(challengeId);
-  // CORRECTED: Day 1 = 2025-10-30, Day 8 = 2025-11-06
-  const tgeStart = new Date('2025-10-30T00:00:00Z');
-  const date = new Date(tgeStart.getTime() + (day - 1) * 24 * 60 * 60 * 1000);
+  const miningStart = new Date(MINING_START_DATE + 'T00:00:00Z');
+  const date = new Date(miningStart.getTime() + (day - 1) * 24 * 60 * 60 * 1000);
   return date.toISOString().split('T')[0];
 }
 
 /**
+ * Get date string from receipt timestamp
+ * Returns the local date when the solution was submitted
+ */
+function dateFromTimestamp(ts: string): string {
+  const date = new Date(ts);
+  return date.toISOString().split('T')[0];
+}
+
+/**
+ * Get day number from submission date
+ * Day 1 = 2025-11-20 (mining start), so we calculate days since mining began
+ */
+function dayFromSubmissionDate(ts: string): number {
+  const miningStart = new Date(MINING_START_DATE + 'T00:00:00Z');
+  const submissionDate = new Date(ts);
+  const daysSinceMiningStart = Math.floor((submissionDate.getTime() - miningStart.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+  return daysSinceMiningStart;
+}
+
+/**
  * Compute statistics from receipts with DFO rewards
+ * Groups by SUBMISSION DATE (when user submitted), not challenge day
+ * DFO rewards are still calculated based on the challenge's day rate
  */
 export function computeStats(receipts: ReceiptEntry[], rates: number[]): GlobalStats {
   if (receipts.length === 0) {
@@ -102,20 +126,29 @@ export function computeStats(receipts: ReceiptEntry[], rates: number[]): GlobalS
     };
   }
 
-  // Group by address and day
-  const addressDayMap = new Map<string, Map<number, number>>();
+  // Group by address and SUBMISSION day (not challenge day)
+  const addressDayMap = new Map<string, Map<number, { count: number; dfo: number }>>();
   const addressTimestamps = new Map<string, string[]>();
 
   for (const receipt of receipts) {
-    const day = dayFromChallengeId(receipt.challenge_id);
+    const submissionDay = dayFromSubmissionDate(receipt.ts); // Use submission date for grouping AND rate
     const address = receipt.address;
 
-    // Count receipts per address per day
+    // Calculate DFO based on SUBMISSION day (rate is tied to when you submitted, not the challenge)
+    // Only use rate if it exists - rates for current day won't be available until midnight
+    const rateIndex = submissionDay - 1;
+    const dfoPerReceipt = (rateIndex >= 0 && rateIndex < rates.length) ? rates[rateIndex] : 0;
+
+    // Count receipts per address per submission day
     if (!addressDayMap.has(address)) {
       addressDayMap.set(address, new Map());
     }
     const dayMap = addressDayMap.get(address)!;
-    dayMap.set(day, (dayMap.get(day) || 0) + 1);
+    const existing = dayMap.get(submissionDay) || { count: 0, dfo: 0 };
+    dayMap.set(submissionDay, {
+      count: existing.count + 1,
+      dfo: existing.dfo + dfoPerReceipt,
+    });
 
     // Track timestamps for first/last solution
     if (!addressTimestamps.has(address)) {
@@ -132,24 +165,21 @@ export function computeStats(receipts: ReceiptEntry[], rates: number[]): GlobalS
     let totalReceipts = 0;
     let totalDfo = 0;
 
-    for (const [day, count] of dayMap.entries()) {
-      const challengeId = `**D${day.toString().padStart(2, '0')}C00`;
-      const date = dateFromChallengeId(challengeId);
-
-      // Calculate DFO
-      const rateIndex = day - 1;
-      const dfoPerReceipt = rates[rateIndex] || 0;
-      const dfo = count * dfoPerReceipt;
+    for (const [day, stats] of dayMap.entries()) {
+      // Calculate date from submission day
+      const miningStart = new Date(MINING_START_DATE + 'T00:00:00Z');
+      const date = new Date(miningStart.getTime() + (day - 1) * 24 * 60 * 60 * 1000);
+      const dateStr = date.toISOString().split('T')[0];
 
       days.push({
         day,
-        date,
-        receipts: count,
-        dfo,
+        date: dateStr,
+        receipts: stats.count,
+        dfo: stats.dfo,
       });
 
-      totalReceipts += count;
-      totalDfo += dfo;
+      totalReceipts += stats.count;
+      totalDfo += stats.dfo;
     }
 
     // Sort days descending (most recent first)
@@ -171,36 +201,39 @@ export function computeStats(receipts: ReceiptEntry[], rates: number[]): GlobalS
   // Sort by total receipts descending
   byAddress.sort((a, b) => b.totalReceipts - a.totalReceipts);
 
-  // Compute global daily stats
-  const globalDayMap = new Map<number, Set<string>>();
+  // Compute global daily stats by SUBMISSION date
+  const globalDayMap = new Map<number, { addresses: Set<string>; receipts: number; dfo: number }>();
 
   for (const receipt of receipts) {
-    const day = dayFromChallengeId(receipt.challenge_id);
-    if (!globalDayMap.has(day)) {
-      globalDayMap.set(day, new Set());
+    const submissionDay = dayFromSubmissionDate(receipt.ts);
+
+    // Calculate DFO based on SUBMISSION day (rate is tied to when you submitted, not the challenge)
+    // Only use rate if it exists - rates for current day won't be available until midnight
+    const rateIndex = submissionDay - 1;
+    const dfoPerReceipt = (rateIndex >= 0 && rateIndex < rates.length) ? rates[rateIndex] : 0;
+
+    if (!globalDayMap.has(submissionDay)) {
+      globalDayMap.set(submissionDay, { addresses: new Set(), receipts: 0, dfo: 0 });
     }
-    globalDayMap.get(day)!.add(receipt.address);
+    const dayStats = globalDayMap.get(submissionDay)!;
+    dayStats.addresses.add(receipt.address);
+    dayStats.receipts++;
+    dayStats.dfo += dfoPerReceipt;
   }
 
   const days: DayStats[] = [];
-  for (const [day, addresses] of globalDayMap.entries()) {
-    const challengeId = `**D${day.toString().padStart(2, '0')}C00`;
-    const date = dateFromChallengeId(challengeId);
-
-    // Count total receipts for this day
-    const receiptsThisDay = receipts.filter(r => dayFromChallengeId(r.challenge_id) === day).length;
-
-    // Calculate DFO for this day
-    const rateIndex = day - 1;
-    const dfoPerReceipt = rates[rateIndex] || 0;
-    const dfo = receiptsThisDay * dfoPerReceipt;
+  for (const [day, stats] of globalDayMap.entries()) {
+    // Calculate date from submission day
+    const miningStart = new Date(MINING_START_DATE + 'T00:00:00Z');
+    const date = new Date(miningStart.getTime() + (day - 1) * 24 * 60 * 60 * 1000);
+    const dateStr = date.toISOString().split('T')[0];
 
     days.push({
       day,
-      date,
-      receipts: receiptsThisDay,
-      addresses: addresses.size,
-      dfo,
+      date: dateStr,
+      receipts: stats.receipts,
+      addresses: stats.addresses.size,
+      dfo: stats.dfo,
     });
   }
 
@@ -230,9 +263,11 @@ export function computeStats(receipts: ReceiptEntry[], rates: number[]): GlobalS
  */
 export function getTodayStats(receipts: ReceiptEntry[], rates: number[]): DayStats | null {
   const today = new Date().toISOString().split('T')[0];
+
+  // Filter receipts by SUBMISSION date (r.ts), not challenge ID
   const todayReceipts = receipts.filter(r => {
-    const date = dateFromChallengeId(r.challenge_id);
-    return date === today;
+    const submissionDate = dateFromTimestamp(r.ts);
+    return submissionDate === today;
   });
 
   if (todayReceipts.length === 0) {
@@ -240,19 +275,20 @@ export function getTodayStats(receipts: ReceiptEntry[], rates: number[]): DaySta
   }
 
   const addresses = new Set(todayReceipts.map(r => r.address));
-  const day = dayFromChallengeId(todayReceipts[0].challenge_id);
+  const day = dayFromSubmissionDate(todayReceipts[0].ts); // Use submission date for day number
 
-  // Calculate DFO
+  // Calculate DFO based on SUBMISSION day (rate is tied to when you submitted, not the challenge)
+  // Only use rate if it exists - rates for current day won't be available until midnight
   const rateIndex = day - 1;
-  const dfoPerReceipt = rates[rateIndex] || 0;
-  const dfo = todayReceipts.length * dfoPerReceipt;
+  const dfoPerReceipt = (rateIndex >= 0 && rateIndex < rates.length) ? rates[rateIndex] : 0;
+  const totalDfo = todayReceipts.length * dfoPerReceipt;
 
   return {
     day,
     date: today,
     receipts: todayReceipts.length,
     addresses: addresses.size,
-    dfo,
+    dfo: totalDfo,
   };
 }
 
@@ -310,12 +346,13 @@ export function computeHourlyStats(receipts: ReceiptEntry[], rates: number[]): H
   // Count unique addresses
   const uniqueAddresses = new Set(hourReceipts.map(r => r.address));
 
-  // Calculate DFO earnings
+  // Calculate DFO earnings based on SUBMISSION day
+  // Only use rate if it exists - rates for current day won't be available until midnight
   let totalDfo = 0;
   for (const receipt of hourReceipts) {
-    const day = dayFromChallengeId(receipt.challenge_id);
-    const rateIndex = day - 1;
-    const dfoPerReceipt = rates[rateIndex] || 0;
+    const submissionDay = dayFromSubmissionDate(receipt.ts);
+    const rateIndex = submissionDay - 1;
+    const dfoPerReceipt = (rateIndex >= 0 && rateIndex < rates.length) ? rates[rateIndex] : 0;
     totalDfo += dfoPerReceipt;
   }
 
@@ -357,12 +394,13 @@ export function computeLastNHours(receipts: ReceiptEntry[], rates: number[], hou
     // Count unique addresses
     const uniqueAddresses = new Set(hourReceipts.map(r => r.address));
 
-    // Calculate DFO earnings
+    // Calculate DFO earnings based on SUBMISSION day (rate is tied to when you submitted, not the challenge)
+    // Only use rate if it exists - rates for current day won't be available until midnight
     let totalDfo = 0;
     for (const receipt of hourReceipts) {
-      const day = dayFromChallengeId(receipt.challenge_id);
-      const rateIndex = day - 1;
-      const dfoPerReceipt = rates[rateIndex] || 0;
+      const submissionDay = dayFromSubmissionDate(receipt.ts);
+      const rateIndex = submissionDay - 1;
+      const dfoPerReceipt = (rateIndex >= 0 && rateIndex < rates.length) ? rates[rateIndex] : 0;
       totalDfo += dfoPerReceipt;
     }
 
