@@ -40,6 +40,12 @@ interface MiningStats {
   solutionsToday: number;
   solutionsYesterday: number;
   workerThreads: number;
+  // Challenge info for dashboard
+  currentDifficulty: string | null;
+  latestChallengeId: string | null;
+  latestDifficulty: string | null;
+  miningHistorical: boolean;
+  challengeExpiresAt: string | null;
 }
 
 interface LogEntry {
@@ -147,6 +153,12 @@ function MiningDashboardContent() {
   const [initialWorkersPerAddress, setInitialWorkersPerAddress] = useState<number>(5);
   const [applyingChanges, setApplyingChanges] = useState(false);
   const [showApplyConfirmation, setShowApplyConfirmation] = useState(false);
+
+  // Challenge Strategy state
+  const [preferEasierChallenges, setPreferEasierChallenges] = useState<boolean>(false);
+  const [minChallengeTimeMinutes, setMinChallengeTimeMinutes] = useState<number>(15);
+  const [syncingChallenges, setSyncingChallenges] = useState<boolean>(false);
+  const [challengeSyncResult, setChallengeSyncResult] = useState<{ success: boolean; message: string; easiest?: any } | null>(null);
 
   // Addresses state
   const [addressesData, setAddressesData] = useState<any | null>(null);
@@ -997,16 +1009,21 @@ function MiningDashboardContent() {
         setScaleError(data.error || 'Failed to load system specifications');
       }
 
-      // Also load current worker grouping config
+      // Also load current worker grouping config and challenge strategy
       const statusResponse = await fetch('/api/mining/status');
       const statusData = await statusResponse.json();
-      if (statusData.config) {
-        const mode = statusData.config.workerGroupingMode || 'auto';
-        const workers = statusData.config.workersPerAddress || 5;
+      // Config is nested inside stats: { success: true, stats: { config: {...} } }
+      const config = statusData.stats?.config || statusData.config;
+      if (config) {
+        const mode = config.workerGroupingMode || 'auto';
+        const workers = config.workersPerAddress || 5;
         setWorkerGroupingMode(mode);
         setWorkersPerAddress(workers);
         setInitialWorkerGroupingMode(mode);
         setInitialWorkersPerAddress(workers);
+        // Load Challenge Strategy settings
+        setPreferEasierChallenges(config.preferEasierChallenges || false);
+        setMinChallengeTimeMinutes(config.minChallengeTimeMinutes || 15);
       }
     } catch (err: any) {
       setScaleError(err.message || 'Failed to connect to API');
@@ -1027,6 +1044,55 @@ function MiningDashboardContent() {
       console.error('Failed to fetch version info:', err);
     } finally {
       setVersionLoading(false);
+    }
+  };
+
+  // Sync challenge history from community API
+  const syncChallengeHistory = async () => {
+    setSyncingChallenges(true);
+    setChallengeSyncResult(null);
+
+    try {
+      // Get the history URL from the profile
+      const profileResponse = await fetch('/api/profile');
+      const profileData = await profileResponse.json();
+      const historyUrl = profileData?.profile?.challenge?.historyUrl;
+
+      if (!historyUrl) {
+        setChallengeSyncResult({
+          success: false,
+          message: 'No challenge history URL configured for this profile',
+        });
+        return;
+      }
+
+      const response = await fetch('/api/mining/challenge-history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: historyUrl }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setChallengeSyncResult({
+          success: true,
+          message: `Imported ${data.imported} challenges. ${data.totalValid} valid challenges available.`,
+          easiest: data.easiestChallenge,
+        });
+      } else {
+        setChallengeSyncResult({
+          success: false,
+          message: data.error || 'Failed to sync challenge history',
+        });
+      }
+    } catch (err: any) {
+      setChallengeSyncResult({
+        success: false,
+        message: err.message || 'Failed to sync challenge history',
+      });
+    } finally {
+      setSyncingChallenges(false);
     }
   };
 
@@ -1092,6 +1158,8 @@ function MiningDashboardContent() {
           batchSize: editedBatchSize,
           workerGroupingMode,
           workersPerAddress,
+          preferEasierChallenges,
+          minChallengeTimeMinutes,
         }),
       });
 
@@ -1412,20 +1480,25 @@ function MiningDashboardContent() {
               {/* Primary Stats - Hero Cards */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Current Challenge Card with Mining Status */}
-                <Card variant="bordered" className="bg-gradient-to-br from-blue-900/20 to-blue-800/10 border-blue-700/50">
+                <Card variant="bordered" className={`bg-gradient-to-br ${stats.miningHistorical ? 'from-yellow-900/20 to-yellow-800/10 border-yellow-700/50' : 'from-blue-900/20 to-blue-800/10 border-blue-700/50'}`}>
                   <CardContent className="p-6">
-                    <div className="flex items-start justify-between mb-4">
+                    <div className="flex items-start justify-between mb-3">
                       <div className="flex items-center gap-3">
-                        <div className="p-3 bg-blue-500/20 rounded-lg">
-                          <Target className="w-6 h-6 text-blue-400" />
+                        <div className={`p-3 rounded-lg ${stats.miningHistorical ? 'bg-yellow-500/20' : 'bg-blue-500/20'}`}>
+                          <Target className={`w-6 h-6 ${stats.miningHistorical ? 'text-yellow-400' : 'text-blue-400'}`} />
                         </div>
                         <div>
                           <div className="flex items-center gap-2 mb-1">
-                            <p className="text-sm text-gray-400 font-medium">Current Challenge</p>
+                            <p className="text-sm text-gray-400 font-medium">Mining Challenge</p>
                             {stats.active && (
                               <span className="flex items-center gap-1.5 text-xs font-semibold text-green-400">
                                 <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
                                 Mining
+                              </span>
+                            )}
+                            {stats.miningHistorical && (
+                              <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-yellow-500/20 text-yellow-400 rounded">
+                                EASIER
                               </span>
                             )}
                           </div>
@@ -1435,6 +1508,35 @@ function MiningDashboardContent() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Difficulty Info */}
+                    {stats.currentDifficulty && (
+                      <div className="mb-3 p-2 bg-gray-800/50 rounded-lg">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-gray-400">Difficulty</span>
+                          <span className={`font-mono ${stats.miningHistorical ? 'text-yellow-400' : 'text-blue-400'}`}>
+                            {stats.currentDifficulty.slice(0, 8)}
+                          </span>
+                        </div>
+                        {stats.miningHistorical && stats.latestDifficulty && (
+                          <div className="flex items-center justify-between text-xs mt-1 pt-1 border-t border-gray-700">
+                            <span className="text-gray-500">Latest API</span>
+                            <span className="text-gray-500 font-mono">
+                              {stats.latestChallengeId?.slice(2, 10)} ({stats.latestDifficulty.slice(0, 8)})
+                            </span>
+                          </div>
+                        )}
+                        {stats.miningHistorical && stats.currentDifficulty && stats.latestDifficulty && (
+                          <div className="flex items-center justify-center mt-2">
+                            <span className="px-2 py-0.5 text-[10px] font-semibold bg-green-500/20 text-green-400 rounded">
+                              {Math.round(parseInt(stats.currentDifficulty, 16) / parseInt(stats.latestDifficulty, 16))}x EASIER
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Progress */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-gray-400">Progress</span>
@@ -1444,10 +1546,16 @@ function MiningDashboardContent() {
                       </div>
                       <div className="w-full bg-gray-700/50 rounded-full h-2">
                         <div
-                          className={`h-full rounded-full transition-all duration-300 ${stats.active ? 'bg-blue-500' : 'bg-gray-500'}`}
+                          className={`h-full rounded-full transition-all duration-300 ${stats.active ? (stats.miningHistorical ? 'bg-yellow-500' : 'bg-blue-500') : 'bg-gray-500'}`}
                           style={{ width: `${(stats.addressesProcessedCurrentChallenge / stats.totalAddresses) * 100}%` }}
                         />
                       </div>
+                      {stats.challengeExpiresAt && (
+                        <div className="flex items-center justify-between text-xs text-gray-500">
+                          <span>Expires</span>
+                          <span>{new Date(stats.challengeExpiresAt).toLocaleTimeString()}</span>
+                        </div>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -1644,9 +1752,16 @@ function MiningDashboardContent() {
                             }`}
                           >
                             <div className="flex-1 min-w-0">
-                              <p className="text-xs text-gray-400 mb-1">
-                                {new Date(receipt.ts).toLocaleString()}
-                              </p>
+                              <div className="flex items-center gap-2 mb-1">
+                                <p className="text-xs text-gray-400">
+                                  {new Date(receipt.ts).toLocaleString()}
+                                </p>
+                                {receipt.challenge_id && (
+                                  <span className="text-xs text-purple-400 font-mono">
+                                    {receipt.challenge_id}
+                                  </span>
+                                )}
+                              </div>
                               <div className="flex items-center gap-2">
                                 <p className="text-sm text-white font-mono truncate">
                                   {receipt.address.slice(0, 20)}...{receipt.address.slice(-8)}
@@ -3381,6 +3496,125 @@ function MiningDashboardContent() {
                           <strong> {Math.floor((editedWorkerThreads || 11) / workersPerAddress)} addresses mining in parallel</strong>
                         </span>
                       </Alert>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Challenge Strategy - AT TOP for visibility */}
+                <Card variant="elevated" className="border-2 border-yellow-500/50">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Zap className="w-6 h-6 text-yellow-400" />
+                      Challenge Strategy
+                    </CardTitle>
+                    <CardDescription>
+                      Configure which challenges to mine - current or easier historical ones
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {/* Toggle for Prefer Easier Challenges */}
+                    <div className="flex items-center justify-between p-4 bg-yellow-900/30 border border-yellow-600/50 rounded-lg">
+                      <div className="space-y-1">
+                        <label className="text-sm font-medium text-white">Prefer Easier Challenges</label>
+                        <p className="text-xs text-gray-400">
+                          Mine easier historical challenges instead of the current harder one
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setPreferEasierChallenges(!preferEasierChallenges)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          preferEasierChallenges ? 'bg-yellow-500' : 'bg-gray-600'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            preferEasierChallenges ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {preferEasierChallenges && (
+                      <>
+                        <Alert variant="info">
+                          <Zap className="w-4 h-4" />
+                          <span className="text-sm">
+                            When enabled, the miner will automatically switch to easier challenges from history
+                            if they have enough time remaining. This can significantly increase your success rate!
+                          </span>
+                        </Alert>
+
+                        <div className="space-y-2">
+                          <label className="block text-sm font-medium text-gray-300">
+                            Minimum Time Remaining (minutes)
+                          </label>
+                          <input
+                            type="number"
+                            min="5"
+                            max="120"
+                            value={minChallengeTimeMinutes}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === '') {
+                                setMinChallengeTimeMinutes(15);
+                              } else {
+                                setMinChallengeTimeMinutes(Math.max(5, Math.min(120, parseInt(val) || 15)));
+                              }
+                            }}
+                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-500"
+                          />
+                          <p className="text-xs text-gray-400">
+                            Only consider historical challenges with at least this much time before they expire.
+                            Default: 15 minutes. Lower values are riskier but may find more opportunities.
+                          </p>
+                        </div>
+
+                        {/* Sync Challenge History Button */}
+                        <div className="space-y-3">
+                          <Button
+                            onClick={syncChallengeHistory}
+                            disabled={syncingChallenges}
+                            variant="outline"
+                            className="w-full border-yellow-600 text-yellow-400 hover:bg-yellow-900/30"
+                          >
+                            {syncingChallenges ? (
+                              <>
+                                <RefreshCw className="w-4 h-4 animate-spin mr-2" />
+                                Syncing...
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCw className="w-4 h-4 mr-2" />
+                                Sync Challenge History from Community
+                              </>
+                            )}
+                          </Button>
+
+                          {challengeSyncResult && (
+                            <Alert variant={challengeSyncResult.success ? 'success' : 'error'}>
+                              {challengeSyncResult.success ? (
+                                <CheckCircle2 className="w-4 h-4" />
+                              ) : (
+                                <XCircle className="w-4 h-4" />
+                              )}
+                              <div className="text-sm">
+                                <p>{challengeSyncResult.message}</p>
+                                {challengeSyncResult.easiest && (
+                                  <p className="mt-1 text-xs opacity-80">
+                                    Easiest available: {challengeSyncResult.easiest.challenge_id}
+                                    (difficulty: {challengeSyncResult.easiest.difficulty},
+                                    expires in {challengeSyncResult.easiest.minutesRemaining} min)
+                                  </p>
+                                )}
+                              </div>
+                            </Alert>
+                          )}
+
+                          <p className="text-xs text-gray-400">
+                            Sync pulls challenge history from the community API. This helps you find easier historical challenges to mine.
+                          </p>
+                        </div>
+                      </>
                     )}
                   </CardContent>
                 </Card>

@@ -54,6 +54,7 @@ class MiningOrchestrator extends EventEmitter {
   private workerStats = new Map<number, WorkerStats>(); // Track stats for each worker (workerId -> WorkerStats)
   private hourlyRestartTimer: NodeJS.Timeout | null = null; // Timer for hourly restart
   private watchdogTimer: NodeJS.Timeout | null = null; // Timer for watchdog monitoring
+  private autoRetryTimer: NodeJS.Timeout | null = null; // Timer for automatic retry of failed submissions (every 4 hours)
   private stoppedWorkers = new Set<number>(); // Track workers that should stop immediately
   private addressSubmissionFailures = new Map<string, number>(); // Track submission failures per address (address+challenge key)
   private customBatchSize: number | null = null; // Custom batch size override
@@ -65,6 +66,11 @@ class MiningOrchestrator extends EventEmitter {
   private previousChallengeId: string | null = null; // Previous challenge ID
   private gracefulHandoverInProgress = false; // Flag to indicate workers are finishing old challenge
   private romReinitializationInProgress = false; // Flag to prevent multiple simultaneous ROM reinitializations
+  private preferEasierChallenges = false; // Mine easiest valid challenge instead of current
+  private minChallengeTimeMinutes = 15; // Minimum time remaining on challenge to consider it
+  private latestApiChallenge: Challenge | null = null; // Latest challenge from API (before easier challenge selection)
+  private currentChallengeExpiresAt: string | null = null; // When the mining challenge expires
+  private lastLoggedEasierChallengeId: string | null = null; // Prevent log spam for repeated easier challenge notifications
 
   constructor() {
     super();
@@ -92,7 +98,13 @@ class MiningOrchestrator extends EventEmitter {
     this.customBatchSize = savedConfig.batchSize;
     this.workerGroupingMode = savedConfig.workerGroupingMode;
     this.workersPerAddress = savedConfig.workersPerAddress;
+    this.preferEasierChallenges = savedConfig.preferEasierChallenges ?? false;
+    this.minChallengeTimeMinutes = savedConfig.minChallengeTimeMinutes ?? 15;
     console.log('[Orchestrator] Initialized with saved configuration:', savedConfig);
+    if (this.preferEasierChallenges) {
+      console.log('[Orchestrator] ⚡ PREFER EASIER CHALLENGES MODE ENABLED');
+      console.log(`[Orchestrator]    Min time remaining: ${this.minChallengeTimeMinutes} minutes`);
+    }
   }
 
   /**
@@ -103,6 +115,8 @@ class MiningOrchestrator extends EventEmitter {
     batchSize?: number;
     workerGroupingMode?: 'auto' | 'all-on-one' | 'grouped';
     workersPerAddress?: number;
+    preferEasierChallenges?: boolean;
+    minChallengeTimeMinutes?: number;
   }): void {
     if (config.workerThreads !== undefined) {
       console.log(`[Orchestrator] Updating workerThreads: ${this.workerThreads} -> ${config.workerThreads}`);
@@ -120,6 +134,21 @@ class MiningOrchestrator extends EventEmitter {
       console.log(`[Orchestrator] Updating workersPerAddress: ${this.workersPerAddress} -> ${config.workersPerAddress}`);
       this.workersPerAddress = Math.max(1, config.workersPerAddress);
     }
+    if (config.preferEasierChallenges !== undefined) {
+      console.log(`[Orchestrator] Updating preferEasierChallenges: ${this.preferEasierChallenges} -> ${config.preferEasierChallenges}`);
+      this.preferEasierChallenges = config.preferEasierChallenges;
+      if (this.preferEasierChallenges) {
+        console.log('[Orchestrator] ⚡ PREFER EASIER CHALLENGES MODE ENABLED');
+      } else {
+        console.log('[Orchestrator] ⚡ PREFER EASIER CHALLENGES MODE DISABLED - using current challenge');
+        // Reset easier challenge tracking when disabled
+        this.lastLoggedEasierChallengeId = null;
+      }
+    }
+    if (config.minChallengeTimeMinutes !== undefined) {
+      console.log(`[Orchestrator] Updating minChallengeTimeMinutes: ${this.minChallengeTimeMinutes} -> ${config.minChallengeTimeMinutes}`);
+      this.minChallengeTimeMinutes = Math.max(5, config.minChallengeTimeMinutes); // Minimum 5 minutes
+    }
 
     // Save updated configuration to disk
     configManager.saveConfig({
@@ -127,6 +156,8 @@ class MiningOrchestrator extends EventEmitter {
       batchSize: this.customBatchSize,
       workerGroupingMode: this.workerGroupingMode,
       workersPerAddress: this.workersPerAddress,
+      preferEasierChallenges: this.preferEasierChallenges,
+      minChallengeTimeMinutes: this.minChallengeTimeMinutes,
     });
   }
 
@@ -138,12 +169,16 @@ class MiningOrchestrator extends EventEmitter {
     batchSize: number;
     workerGroupingMode: 'auto' | 'all-on-one' | 'grouped';
     workersPerAddress: number;
+    preferEasierChallenges: boolean;
+    minChallengeTimeMinutes: number;
   } {
     return {
       workerThreads: this.workerThreads,
       batchSize: this.getBatchSize(),
       workerGroupingMode: this.workerGroupingMode,
       workersPerAddress: this.workersPerAddress,
+      preferEasierChallenges: this.preferEasierChallenges,
+      minChallengeTimeMinutes: this.minChallengeTimeMinutes,
     };
   }
 
@@ -304,6 +339,11 @@ class MiningOrchestrator extends EventEmitter {
 
     // Dev fee will be checked after each solution submission (not on startup)
 
+    // Auto-seed challenge history if preferEasierChallenges is enabled
+    if (this.preferEasierChallenges) {
+      await this.seedChallengeHistoryFromApi();
+    }
+
     this.isRunning = true;
     this.startTime = Date.now();
     this.solutionsFound = 0;
@@ -316,6 +356,9 @@ class MiningOrchestrator extends EventEmitter {
 
     // Start watchdog monitor to detect stuck/idle workers
     this.startWatchdog();
+
+    // Start automatic retry of failed submissions every 4 hours
+    this.startAutoRetry();
 
     this.emit('status', {
       type: 'status',
@@ -340,6 +383,12 @@ class MiningOrchestrator extends EventEmitter {
     if (this.hourlyRestartTimer) {
       clearTimeout(this.hourlyRestartTimer);
       this.hourlyRestartTimer = null;
+    }
+
+    // Clear auto-retry timer
+    if (this.autoRetryTimer) {
+      clearInterval(this.autoRetryTimer);
+      this.autoRetryTimer = null;
     }
 
     // Stop watchdog monitor
@@ -371,6 +420,7 @@ class MiningOrchestrator extends EventEmitter {
     this.currentChallenge = null;
     this.isMining = false;
     this.addressesProcessedCurrentChallenge.clear();
+    this.lastLoggedEasierChallengeId = null;
 
     console.log('[Orchestrator] Reinitialization complete, starting fresh mining session...');
 
@@ -511,6 +561,10 @@ class MiningOrchestrator extends EventEmitter {
       allReceipts.filter(r => !r.isDevFee).map(r => r.address)
     ).size;
 
+    // Determine if mining a historical challenge
+    const miningHistorical = this.latestApiChallenge && this.currentChallenge &&
+      this.latestApiChallenge.challenge_id !== this.currentChallenge.challenge_id;
+
     return {
       active: this.isRunning,
       challengeId: this.currentChallengeId,
@@ -528,6 +582,12 @@ class MiningOrchestrator extends EventEmitter {
       solutionsToday: timePeriodSolutions.today,
       solutionsYesterday: timePeriodSolutions.yesterday,
       workerThreads: this.workerThreads,
+      // Challenge info for dashboard
+      currentDifficulty: this.currentChallenge?.difficulty || null,
+      latestChallengeId: this.latestApiChallenge?.challenge_id || null,
+      latestDifficulty: this.latestApiChallenge?.difficulty || null,
+      miningHistorical: miningHistorical || false,
+      challengeExpiresAt: this.currentChallengeExpiresAt,
       config: this.getCurrentConfiguration(),
     };
   }
@@ -594,24 +654,73 @@ class MiningOrchestrator extends EventEmitter {
     }
 
     if (isActiveMining && challenge.challenge) {
-      const challengeId = challenge.challenge.challenge_id;
+      let challengeId = challenge.challenge.challenge_id;
+      let effectiveChallenge = challenge.challenge;
+
+      // Store the latest API challenge (before any easier challenge selection)
+      this.latestApiChallenge = challenge.challenge;
 
       // Log challenge to history for future multi-challenge mining support
-      challengeHistoryLogger.logChallenge(
+      const historyEntry = challengeHistoryLogger.logChallenge(
         challenge.challenge,
         this.currentProfileId,
         this.challengeValidityHours
       );
 
-      // New challenge detected
+      // Track expiry of the challenge we're mining (will be updated if we switch to easier)
+      this.currentChallengeExpiresAt = historyEntry.expiresAt;
+
+      // PREFER EASIER CHALLENGES: Check if there's an easier valid challenge to mine
+      if (this.preferEasierChallenges) {
+        const easierChallenge = challengeHistoryLogger.getEasiestValidChallenge(
+          this.currentProfileId,
+          this.minChallengeTimeMinutes
+        );
+
+        if (easierChallenge && easierChallenge.challenge_id !== challengeId) {
+          const currentDiff = parseInt(challenge.challenge.difficulty, 16);
+          const easierDiff = parseInt(easierChallenge.difficulty, 16);
+
+          // Only switch if the historical challenge is actually easier (higher hex = easier)
+          if (easierDiff > currentDiff) {
+            // Only log if this is a different easier challenge than we logged before
+            // This prevents log spam when we're already mining the easier challenge
+            if (this.lastLoggedEasierChallengeId !== easierChallenge.challenge_id) {
+              const timeRemaining = new Date(easierChallenge.expiresAt).getTime() - Date.now();
+              const minutesRemaining = Math.floor(timeRemaining / 60000);
+
+              console.log('[Orchestrator] ⚡ EASIER CHALLENGE FOUND IN HISTORY');
+              console.log(`[Orchestrator]    API challenge: ${challengeId} (difficulty: ${challenge.challenge.difficulty})`);
+              console.log(`[Orchestrator]    Easier challenge:  ${easierChallenge.challenge_id} (difficulty: ${easierChallenge.difficulty})`);
+              console.log(`[Orchestrator]    Time remaining: ${minutesRemaining} minutes`);
+              console.log(`[Orchestrator]    Switching to easier challenge...`);
+              this.lastLoggedEasierChallengeId = easierChallenge.challenge_id;
+            }
+
+            // Use the easier challenge instead
+            effectiveChallenge = {
+              challenge_id: easierChallenge.challenge_id,
+              difficulty: easierChallenge.difficulty,
+              no_pre_mine: easierChallenge.no_pre_mine,
+              latest_submission: easierChallenge.latest_submission,
+              no_pre_mine_hour: easierChallenge.no_pre_mine_hour,
+            };
+            challengeId = easierChallenge.challenge_id;
+            // Update expiry to the easier challenge's expiry
+            this.currentChallengeExpiresAt = easierChallenge.expiresAt;
+          }
+        }
+      }
+
+      // New challenge detected (or switching to easier challenge)
       if (challengeId !== this.currentChallengeId) {
         console.log('[Orchestrator] ========================================');
         console.log('[Orchestrator] NEW CHALLENGE DETECTED:', challengeId);
-        console.log('[Orchestrator] Challenge data:', JSON.stringify(challenge.challenge, null, 2));
+        console.log('[Orchestrator] Challenge data:', JSON.stringify(effectiveChallenge, null, 2));
         console.log('[Orchestrator] ========================================');
 
         // Check if no_pre_mine changed (indicates new day - ROM must be reinitialized)
-        const noPreMine = challenge.challenge.no_pre_mine;
+        const noPreMine = effectiveChallenge.no_pre_mine;
         const currentNoPreMine = this.currentChallenge?.no_pre_mine;
         const noPreMineChanged = currentNoPreMine !== undefined && currentNoPreMine !== noPreMine;
 
@@ -704,7 +813,7 @@ class MiningOrchestrator extends EventEmitter {
 
         // Update to new challenge
         this.currentChallengeId = challengeId;
-        this.currentChallenge = challenge.challenge;
+        this.currentChallenge = effectiveChallenge;
 
         // Load challenge state from receipts (restore progress, solutions count, etc.)
         this.loadChallengeState(challengeId);
@@ -729,9 +838,10 @@ class MiningOrchestrator extends EventEmitter {
         // These change frequently as solutions are submitted across the network
 
         // Check if difficulty changed (happens hourly on no_pre_mine_hour updates)
-        if (this.currentChallenge && challenge.challenge.difficulty !== this.currentChallenge.difficulty) {
+        // Note: When mining historical challenges, we track difficulty changes from the history
+        if (this.currentChallenge && effectiveChallenge.difficulty !== this.currentChallenge.difficulty) {
           const oldDifficulty = this.currentChallenge.difficulty;
-          const newDifficulty = challenge.challenge.difficulty;
+          const newDifficulty = effectiveChallenge.difficulty;
           const oldZeroBits = getDifficultyZeroBits(oldDifficulty);
           const newZeroBits = getDifficultyZeroBits(newDifficulty);
 
@@ -746,7 +856,7 @@ class MiningOrchestrator extends EventEmitter {
           }
         }
 
-        this.currentChallenge = challenge.challenge;
+        this.currentChallenge = effectiveChallenge;
       }
     }
   }
@@ -2102,6 +2212,48 @@ class MiningOrchestrator extends EventEmitter {
     return response.data;
   }
 
+  /**
+   * Seed challenge history from remote API
+   * Used when preferEasierChallenges is enabled to get community-collected challenge data
+   */
+  private async seedChallengeHistoryFromApi(): Promise<void> {
+    try {
+      // Get challenge history URL from active profile
+      const { profileManager } = require('@/lib/config/profile-manager');
+      const profile = profileManager.getActiveProfile();
+      const historyUrl = profile?.challenge?.historyUrl;
+
+      if (!historyUrl) {
+        console.log('[Orchestrator] No challenge history URL configured in profile');
+        return;
+      }
+
+      console.log('[Orchestrator] 📚 Seeding challenge history from community API...');
+      console.log(`[Orchestrator]    URL: ${historyUrl}`);
+
+      const imported = await challengeHistoryLogger.seedFromApi(historyUrl, this.currentProfileId);
+
+      if (imported > 0) {
+        console.log(`[Orchestrator] ✓ Imported ${imported} challenges from community API`);
+
+        // Check what's available
+        const validChallenges = challengeHistoryLogger.getValidChallenges(this.currentProfileId);
+        const easiest = challengeHistoryLogger.getEasiestValidChallenge(this.currentProfileId, this.minChallengeTimeMinutes);
+
+        console.log(`[Orchestrator]    Valid challenges: ${validChallenges.length}`);
+        if (easiest) {
+          const timeRemaining = new Date(easiest.expiresAt).getTime() - Date.now();
+          const minutesRemaining = Math.floor(timeRemaining / 60000);
+          console.log(`[Orchestrator]    Easiest: ${easiest.challenge_id} (difficulty: ${easiest.difficulty}, ${minutesRemaining}min remaining)`);
+        }
+      } else {
+        console.log('[Orchestrator] No new challenges to import (may already be up to date)');
+      }
+    } catch (error: any) {
+      console.error('[Orchestrator] Failed to seed challenge history:', error.message);
+      // Non-fatal - continue without seeded history
+    }
+  }
 
   /**
    * Ensure all addresses are registered for the current profile
@@ -2351,6 +2503,62 @@ class MiningOrchestrator extends EventEmitter {
       clearInterval(this.watchdogTimer);
       this.watchdogTimer = null;
       console.log('[Orchestrator] 🐕 Watchdog monitor stopped');
+    }
+  }
+
+  /**
+   * Start automatic retry of failed submissions every 4 hours
+   */
+  private startAutoRetry(): void {
+    // Clear any existing timer
+    if (this.autoRetryTimer) {
+      clearInterval(this.autoRetryTimer);
+    }
+
+    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+
+    console.log('[Orchestrator] 🔄 Starting auto-retry timer (runs every 4 hours)');
+
+    // Run immediately on start, then every 4 hours
+    this.runAutoRetry();
+
+    this.autoRetryTimer = setInterval(() => {
+      this.runAutoRetry();
+    }, FOUR_HOURS_MS);
+  }
+
+  /**
+   * Run automatic retry of failed submissions from the last 24 hours
+   */
+  private async runAutoRetry(): Promise<void> {
+    if (!this.isRunning) {
+      console.log('[Orchestrator] Auto-retry skipped - mining not active');
+      return;
+    }
+
+    try {
+      console.log('[Orchestrator] 🔄 Running automatic retry of failed submissions...');
+
+      // Call the retry-all API internally
+      const response = await fetch('http://localhost:3001/api/mining/retry-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        const { succeeded, failed, total } = data.summary || {};
+        if (total > 0) {
+          console.log(`[Orchestrator] 🔄 Auto-retry complete: ${succeeded}/${total} succeeded, ${failed} failed`);
+        } else {
+          console.log('[Orchestrator] 🔄 Auto-retry: No failed submissions to retry');
+        }
+      } else {
+        console.error('[Orchestrator] 🔄 Auto-retry failed:', data.error);
+      }
+    } catch (error: any) {
+      console.error('[Orchestrator] 🔄 Auto-retry error:', error.message);
     }
   }
 

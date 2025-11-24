@@ -7,7 +7,7 @@ import { miningOrchestrator } from '@/lib/mining/orchestrator';
 
 export async function POST(req: NextRequest) {
   try {
-    const { workerThreads, batchSize, workerGroupingMode, workersPerAddress } = await req.json();
+    const { workerThreads, batchSize, workerGroupingMode, workersPerAddress, preferEasierChallenges, minChallengeTimeMinutes } = await req.json();
 
     // Validate workerThreads
     if (workerThreads !== undefined) {
@@ -49,12 +49,34 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Validate preferEasierChallenges
+    if (preferEasierChallenges !== undefined) {
+      if (typeof preferEasierChallenges !== 'boolean') {
+        return NextResponse.json(
+          { success: false, error: 'Invalid preferEasierChallenges value (must be boolean)' },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Validate minChallengeTimeMinutes
+    if (minChallengeTimeMinutes !== undefined) {
+      if (typeof minChallengeTimeMinutes !== 'number' || minChallengeTimeMinutes < 5 || minChallengeTimeMinutes > 120) {
+        return NextResponse.json(
+          { success: false, error: 'Invalid minChallengeTimeMinutes value (must be between 5 and 120)' },
+          { status: 400 }
+        );
+      }
+    }
+
     // Update configuration in the orchestrator
     miningOrchestrator.updateConfiguration({
       workerThreads,
       batchSize,
       workerGroupingMode,
       workersPerAddress,
+      preferEasierChallenges,
+      minChallengeTimeMinutes,
     });
 
     // Get updated configuration

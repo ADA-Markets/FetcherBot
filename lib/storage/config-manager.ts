@@ -11,6 +11,8 @@ export interface MiningConfig {
   batchSize: number | null;
   workerGroupingMode: 'auto' | 'all-on-one' | 'grouped';
   workersPerAddress: number;
+  preferEasierChallenges: boolean; // Mine easiest valid challenge instead of current
+  minChallengeTimeMinutes: number; // Minimum time remaining on challenge to consider it (default 15)
 }
 
 class ConfigManager {
@@ -20,6 +22,8 @@ class ConfigManager {
     batchSize: null, // null means use default
     workerGroupingMode: 'auto',
     workersPerAddress: 5,
+    preferEasierChallenges: false, // Default to mining current challenge
+    minChallengeTimeMinutes: 15, // Need at least 15 minutes to mine a challenge
   };
 
   private get configFile(): string {

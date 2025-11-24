@@ -55,45 +55,8 @@ export async function POST(request: NextRequest) {
     );
     results.push(challengeTest);
 
-    // Test 2: Fetch Terms & Conditions
-    const tandcTest = await testEndpoint(
-      'GET /TandC',
-      'GET',
-      `${API_BASE}/TandC`,
-      async () => {
-        const response = await axios.get(`${API_BASE}/TandC`, { timeout: 10000 });
-        return response;
-      }
-    );
-    results.push(tandcTest);
-
-    // Test 3: Test Address Registration (if wallet loaded)
+    // Test 2: Test Solution Submission (connectivity test only - not a valid solution)
     if (walletManager && testAddress) {
-      const registrationTest = await testEndpoint(
-        'POST /register',
-        'POST',
-        `${API_BASE}/register/{address}/{signature}/{publicKey}`,
-        async () => {
-          // Get T&C message
-          const tandcResp = await axios.get(`${API_BASE}/TandC`, { timeout: 10000 });
-          const message = tandcResp.data.message;
-
-          // Sign message
-          const signature = await walletManager!.signMessage(testAddress.index, message);
-
-          // Attempt registration
-          const registerUrl = `${API_BASE}/register/${testAddress.bech32}/${signature}/${testAddress.publicKeyHex}`;
-          const response = await axios.post(registerUrl, {}, {
-            timeout: 10000,
-            validateStatus: (status) => status < 500 // Allow 4xx errors (e.g., already registered)
-          });
-
-          return response;
-        }
-      );
-      results.push(registrationTest);
-
-      // Test 4: Test Solution Submission (connectivity test only - not a valid solution)
       const submissionTest = await testEndpoint(
         'POST /solution',
         'POST',
@@ -116,14 +79,6 @@ export async function POST(request: NextRequest) {
       results.push(submissionTest);
     } else {
       results.push({
-        endpoint: 'POST /register',
-        method: 'POST',
-        success: false,
-        error: 'Skipped: No password provided. Provide password to test registration.',
-        timestamp: new Date().toISOString(),
-      });
-
-      results.push({
         endpoint: 'POST /solution',
         method: 'POST',
         success: false,
@@ -132,7 +87,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Test 5: Network Latency Test
+    // Test 3: Network Latency Test
     const latencyTests: number[] = [];
     for (let i = 0; i < 3; i++) {
       const start = Date.now();

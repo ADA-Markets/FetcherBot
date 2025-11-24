@@ -16,10 +16,13 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-gray-900 text-white min-h-screen">
-        <div className="bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-white py-3 px-4 text-center shadow-lg">
-          <p className="text-base font-medium">
-            Join our community for latest updates, support, and more!
+      <body className="bg-gray-900 text-white min-h-screen flex flex-col">
+        <div className="flex-1">
+          {children}
+        </div>
+        <div className="bg-gradient-to-r from-orange-500/80 via-red-500/80 to-pink-500/80 text-white py-2 px-4 text-center text-sm">
+          <p>
+            Join our community!
             <a
               href="https://ada.markets/discord"
               target="_blank"
@@ -50,7 +53,6 @@ export default function RootLayout({
             <span className="ml-1">on X</span>
           </p>
         </div>
-        {children}
       </body>
     </html>
   );

@@ -18,7 +18,8 @@
   "challenge": {
     "format": "**D{day}C{challenge}",
     "tgeStartDate": "2025-10-30",
-    "validityHours": 24
+    "validityHours": 24,
+    "historyUrl": "https://miner.ada.markets/api/challenge-history/defensio"
   },
   "branding": {
     "colors": {

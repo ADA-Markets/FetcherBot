@@ -34,6 +34,7 @@ export async function GET() {
         token: profile.token,
         branding: profile.branding,
         api: { baseUrl: profile.api.baseUrl },
+        challenge: profile.challenge, // Include challenge config with historyUrl
       },
     });
   } catch (error: any) {

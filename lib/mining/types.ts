@@ -29,11 +29,19 @@ export interface MiningStats {
   solutionsToday: number; // Solutions found today (since midnight)
   solutionsYesterday: number; // Solutions found yesterday
   workerThreads: number; // Number of parallel mining threads
+  // Challenge info for dashboard display
+  currentDifficulty: string | null; // Difficulty of challenge being mined
+  latestChallengeId: string | null; // Latest challenge from API (may differ if mining historical)
+  latestDifficulty: string | null; // Difficulty of latest API challenge
+  miningHistorical: boolean; // True if mining a historical (easier) challenge
+  challengeExpiresAt: string | null; // When the current mining challenge expires
   config: {
     workerThreads: number;
     batchSize: number;
     workerGroupingMode: 'auto' | 'all-on-one' | 'grouped';
     workersPerAddress: number;
+    preferEasierChallenges: boolean;
+    minChallengeTimeMinutes: number;
   };
 }
 

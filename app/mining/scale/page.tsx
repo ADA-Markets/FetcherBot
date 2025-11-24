@@ -14,6 +14,7 @@ import {
   Settings,
   AlertTriangle,
   CheckCircle2,
+  XCircle,
   Info,
   Zap,
   ArrowLeft
@@ -72,8 +73,12 @@ export default function ScalePage() {
   const [workersPerAddress, setWorkersPerAddress] = useState<number>(5);
   const [workerThreads, setWorkerThreads] = useState<number>(11);
   const [batchSize, setBatchSize] = useState<number>(300);
+  const [preferEasierChallenges, setPreferEasierChallenges] = useState<boolean>(false);
+  const [minChallengeTimeMinutes, setMinChallengeTimeMinutes] = useState<number>(15);
   const [updating, setUpdating] = useState(false);
   const [updateSuccess, setUpdateSuccess] = useState(false);
+  const [syncingChallenges, setSyncingChallenges] = useState<boolean>(false);
+  const [challengeSyncResult, setChallengeSyncResult] = useState<{ success: boolean; message: string; easiest?: any } | null>(null);
 
   useEffect(() => {
     loadSystemSpecs();
@@ -84,11 +89,15 @@ export default function ScalePage() {
     try {
       const response = await fetch('/api/mining/status');
       const data = await response.json();
-      if (data.config) {
-        setWorkerGroupingMode(data.config.workerGroupingMode || 'auto');
-        setWorkersPerAddress(data.config.workersPerAddress || 5);
-        setWorkerThreads(data.config.workerThreads || 11);
-        setBatchSize(data.config.batchSize || 300);
+      // Config is nested inside stats: { success: true, stats: { config: {...} } }
+      const config = data.stats?.config || data.config;
+      if (config) {
+        setWorkerGroupingMode(config.workerGroupingMode || 'auto');
+        setWorkersPerAddress(config.workersPerAddress || 5);
+        setWorkerThreads(config.workerThreads || 11);
+        setBatchSize(config.batchSize || 300);
+        setPreferEasierChallenges(config.preferEasierChallenges || false);
+        setMinChallengeTimeMinutes(config.minChallengeTimeMinutes || 15);
       }
     } catch (err) {
       console.error('Failed to load current config:', err);
@@ -109,6 +118,8 @@ export default function ScalePage() {
           batchSize,
           workerGroupingMode,
           workersPerAddress,
+          preferEasierChallenges,
+          minChallengeTimeMinutes,
         }),
       });
 
@@ -131,6 +142,55 @@ export default function ScalePage() {
     if (workerGroupingMode === 'all-on-one') return 1;
     const minWorkers = workerGroupingMode === 'grouped' ? workersPerAddress : 5;
     return Math.floor(workerThreads / minWorkers);
+  };
+
+  // Sync challenge history from community API
+  const syncChallengeHistory = async () => {
+    setSyncingChallenges(true);
+    setChallengeSyncResult(null);
+
+    try {
+      // Get the history URL from the profile
+      const profileResponse = await fetch('/api/profile');
+      const profileData = await profileResponse.json();
+      const historyUrl = profileData?.profile?.challenge?.historyUrl;
+
+      if (!historyUrl) {
+        setChallengeSyncResult({
+          success: false,
+          message: 'No challenge history URL configured for this profile',
+        });
+        return;
+      }
+
+      const response = await fetch('/api/mining/challenge-history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: historyUrl }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setChallengeSyncResult({
+          success: true,
+          message: `Imported ${data.imported} challenges. ${data.totalValid} valid challenges available.`,
+          easiest: data.easiestChallenge,
+        });
+      } else {
+        setChallengeSyncResult({
+          success: false,
+          message: data.error || 'Failed to sync challenge history',
+        });
+      }
+    } catch (err: any) {
+      setChallengeSyncResult({
+        success: false,
+        message: err.message || 'Failed to sync challenge history',
+      });
+    } finally {
+      setSyncingChallenges(false);
+    }
   };
 
   const loadSystemSpecs = async () => {
@@ -328,6 +388,154 @@ export default function ScalePage() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Challenge Strategy - AT TOP for visibility */}
+        <Card variant="elevated" className="border-2 border-yellow-500/50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Zap className="w-6 h-6 text-yellow-400" />
+              Challenge Strategy
+            </CardTitle>
+            <CardDescription>
+              Configure which challenges to mine - current or easier historical ones
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Toggle for Prefer Easier Challenges */}
+            <div className="flex items-center justify-between p-4 bg-yellow-900/30 border border-yellow-600/50 rounded-lg">
+              <div className="space-y-1">
+                <label className="text-sm font-medium text-white">Prefer Easier Challenges</label>
+                <p className="text-xs text-gray-400">
+                  Mine easier historical challenges instead of the current harder one
+                </p>
+              </div>
+              <button
+                onClick={() => setPreferEasierChallenges(!preferEasierChallenges)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  preferEasierChallenges ? 'bg-yellow-500' : 'bg-gray-600'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    preferEasierChallenges ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {preferEasierChallenges && (
+              <>
+                <Alert variant="info">
+                  <Zap className="w-4 h-4" />
+                  <span className="text-sm">
+                    When enabled, the miner will automatically switch to easier challenges from history
+                    if they have enough time remaining. This can significantly increase your success rate!
+                  </span>
+                </Alert>
+
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-300">
+                    Minimum Time Remaining (minutes)
+                  </label>
+                  <input
+                    type="number"
+                    min="5"
+                    max="120"
+                    value={minChallengeTimeMinutes}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === '') {
+                        setMinChallengeTimeMinutes('' as any);
+                      } else {
+                        setMinChallengeTimeMinutes(Math.max(5, Math.min(120, parseInt(val) || 15)));
+                      }
+                    }}
+                    onBlur={(e) => {
+                      if (e.target.value === '') {
+                        setMinChallengeTimeMinutes(15);
+                      }
+                    }}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-500"
+                  />
+                  <p className="text-xs text-gray-400">
+                    Only consider historical challenges with at least this much time before they expire.
+                    Default: 15 minutes. Lower values are riskier but may find more opportunities.
+                  </p>
+                </div>
+
+                {/* Sync Challenge History Button */}
+                <div className="space-y-3">
+                  <Button
+                    onClick={syncChallengeHistory}
+                    disabled={syncingChallenges}
+                    variant="outline"
+                    className="w-full border-yellow-600 text-yellow-400 hover:bg-yellow-900/30"
+                  >
+                    {syncingChallenges ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin mr-2" />
+                        Syncing...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                        Sync Challenge History from Community
+                      </>
+                    )}
+                  </Button>
+
+                  {challengeSyncResult && (
+                    <Alert variant={challengeSyncResult.success ? 'success' : 'error'}>
+                      {challengeSyncResult.success ? (
+                        <CheckCircle2 className="w-4 h-4" />
+                      ) : (
+                        <XCircle className="w-4 h-4" />
+                      )}
+                      <div className="text-sm">
+                        <p>{challengeSyncResult.message}</p>
+                        {challengeSyncResult.easiest && (
+                          <p className="mt-1 text-xs opacity-80">
+                            Easiest available: {challengeSyncResult.easiest.challenge_id}
+                            (difficulty: {challengeSyncResult.easiest.difficulty},
+                            expires in {challengeSyncResult.easiest.minutesRemaining} min)
+                          </p>
+                        )}
+                      </div>
+                    </Alert>
+                  )}
+
+                  <p className="text-xs text-gray-400">
+                    Sync pulls challenge history from the community API. This helps you find easier historical challenges to mine.
+                  </p>
+                </div>
+              </>
+            )}
+
+            <Button
+              onClick={handleUpdateConfig}
+              disabled={updating}
+              className="w-full"
+              variant={updateSuccess ? "success" : "primary"}
+            >
+              {updating ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Updating...
+                </>
+              ) : updateSuccess ? (
+                <>
+                  <CheckCircle2 className="w-4 h-4" />
+                  Settings Applied!
+                </>
+              ) : (
+                <>
+                  <Settings className="w-4 h-4" />
+                  Apply Challenge Strategy
+                </>
+              )}
+            </Button>
+          </CardContent>
+        </Card>
 
         {/* Warnings */}
         {recommendations.warnings.length > 0 && (
