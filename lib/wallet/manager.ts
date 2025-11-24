@@ -205,6 +205,66 @@ export class WalletManager {
   }
 
   /**
+   * Expand wallet by deriving additional addresses
+   * Requires wallet to be loaded first
+   */
+  async expandAddresses(newTotal: number): Promise<{ added: number; total: number }> {
+    if (!this.mnemonic) {
+      throw new Error('Wallet not loaded. Please load the wallet first.');
+    }
+
+    const currentCount = this.derivedAddresses.length;
+
+    if (newTotal <= currentCount) {
+      throw new Error(`New total (${newTotal}) must be greater than current count (${currentCount})`);
+    }
+
+    if (newTotal > 500) {
+      throw new Error('Maximum address count is 500');
+    }
+
+    const startIndex = currentCount;
+    const toAdd = newTotal - currentCount;
+
+    console.log(`[Wallet] Expanding from ${currentCount} to ${newTotal} addresses (adding ${toAdd})`);
+
+    for (let i = startIndex; i < newTotal; i++) {
+      try {
+        const { address, pubKeyHex } = await this.deriveAddressAtIndex(i);
+
+        this.derivedAddresses.push({
+          index: i,
+          bech32: address,
+          publicKeyHex: pubKeyHex,
+          registered: false,
+        });
+
+        // Log progress every 10 addresses
+        if ((i - startIndex + 1) % 10 === 0) {
+          console.log(`[Wallet] Derived ${i - startIndex + 1}/${toAdd} new addresses`);
+        }
+      } catch (err: any) {
+        console.error(`Failed to derive address at index ${i}:`, err.message);
+        throw err;
+      }
+    }
+
+    // Save updated addresses
+    fs.writeFileSync(
+      getDerivedAddressesFile(),
+      JSON.stringify(this.derivedAddresses, null, 2),
+      { mode: 0o600 }
+    );
+
+    console.log(`[Wallet] Successfully expanded to ${newTotal} addresses`);
+
+    return {
+      added: toAdd,
+      total: this.derivedAddresses.length,
+    };
+  }
+
+  /**
    * Derive a single address at specific index
    */
   private async deriveAddressAtIndex(index: number): Promise<{ address: string; pubKeyHex: string }> {

@@ -165,6 +165,12 @@ function MiningDashboardContent() {
   const [addressesLoading, setAddressesLoading] = useState(false);
   const [addressFilter, setAddressFilter] = useState<'all' | 'solved' | 'unsolved' | 'registered' | 'unregistered'>('all');
 
+  // Expand wallet state
+  const [expandingWallet, setExpandingWallet] = useState(false);
+  const [expandWalletModal, setExpandWalletModal] = useState(false);
+  const [expandTargetCount, setExpandTargetCount] = useState<number>(0);
+  const [expandPassword, setExpandPassword] = useState<string>('');
+
   // Rewards state
   const [rewardsData, setRewardsData] = useState<any | null>(null);
   const [rewardsLoading, setRewardsLoading] = useState(false);
@@ -971,6 +977,55 @@ function MiningDashboardContent() {
       console.error('Failed to fetch addresses:', err);
     } finally {
       setAddressesLoading(false);
+    }
+  };
+
+  const handleExpandWallet = async () => {
+    if (!expandPassword) {
+      addLog('Password is required to expand wallet', 'error');
+      return;
+    }
+
+    if (expandTargetCount <= (addressesData?.summary?.totalAddresses || 0)) {
+      addLog(`Target count must be greater than current count (${addressesData?.summary?.totalAddresses || 0})`, 'error');
+      return;
+    }
+
+    if (expandTargetCount > 500) {
+      addLog('Maximum address count is 500', 'error');
+      return;
+    }
+
+    try {
+      setExpandingWallet(true);
+      addLog(`Expanding wallet to ${expandTargetCount} addresses...`, 'info');
+
+      const response = await fetch('/api/wallet/expand', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: expandPassword,
+          newTotal: expandTargetCount,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to expand wallet');
+      }
+
+      addLog(`Successfully added ${data.added} new addresses! Total: ${data.total}`, 'success');
+      setExpandWalletModal(false);
+      setExpandPassword('');
+
+      // Refresh addresses data to show new addresses
+      await fetchAddresses();
+    } catch (err: any) {
+      console.error('Failed to expand wallet:', err);
+      addLog(`Failed to expand wallet: ${err.message}`, 'error');
+    } finally {
+      setExpandingWallet(false);
     }
   };
 
@@ -2360,6 +2415,22 @@ function MiningDashboardContent() {
                         value={(addressesData.summary?.registeredAddresses || 0) - (addressesData.summary?.solvedCurrentChallenge || 0)}
                         icon={<Clock className="w-8 h-8" />}
                       />
+                    </div>
+
+                    {/* Expand Wallet Button */}
+                    <div className="flex justify-end">
+                      <Button
+                        onClick={() => {
+                          const currentCount = addressesData.summary?.totalAddresses || 0;
+                          setExpandTargetCount(Math.min(currentCount + 50, 500));
+                          setExpandWalletModal(true);
+                        }}
+                        variant="outline"
+                        className="flex items-center gap-2"
+                      >
+                        <Wallet className="w-4 h-4" />
+                        Expand Wallet
+                      </Button>
                     </div>
 
                     {/* Filter Buttons */}
@@ -5325,6 +5396,90 @@ function MiningDashboardContent() {
           </div>
         )}
       </div>
+
+      {/* Expand Wallet Modal */}
+      <Modal
+        isOpen={expandWalletModal}
+        onClose={() => {
+          if (!expandingWallet) {
+            setExpandWalletModal(false);
+            setExpandPassword('');
+          }
+        }}
+        title="Expand Wallet Addresses"
+      >
+        <div className="space-y-4">
+          <p className="text-gray-300">
+            Add more addresses to your wallet. Current count: <strong>{addressesData?.summary?.totalAddresses || 0}</strong>
+          </p>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Target Total Address Count (Max: 500)
+            </label>
+            <input
+              type="number"
+              min={(addressesData?.summary?.totalAddresses || 0) + 1}
+              max={500}
+              value={expandTargetCount}
+              onChange={(e) => setExpandTargetCount(parseInt(e.target.value) || 0)}
+              disabled={expandingWallet}
+              className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              placeholder="e.g., 250"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              This will add {Math.max(0, expandTargetCount - (addressesData?.summary?.totalAddresses || 0))} new addresses
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Wallet Password
+            </label>
+            <input
+              type="password"
+              value={expandPassword}
+              onChange={(e) => setExpandPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && expandPassword && !expandingWallet) {
+                  handleExpandWallet();
+                }
+              }}
+              disabled={expandingWallet}
+              autoFocus
+              className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              placeholder="Enter wallet password"
+            />
+          </div>
+
+          <div className="flex gap-3 justify-end">
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setExpandWalletModal(false);
+                setExpandPassword('');
+              }}
+              disabled={expandingWallet}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleExpandWallet}
+              disabled={expandingWallet || !expandPassword || expandTargetCount <= (addressesData?.summary?.totalAddresses || 0)}
+            >
+              {expandingWallet ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  Expanding...
+                </>
+              ) : (
+                'Expand Wallet'
+              )}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Consolidation Modal */}
       <Modal
